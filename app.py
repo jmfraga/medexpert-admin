@@ -401,6 +401,43 @@ async def get_config(client_id: int):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+@app.post("/api/clients/{client_id}/client-config")
+async def save_client_config(client_id: int, request: Request):
+    data = await request.json()
+    allowed_keys = {"whisper_model", "whisper_language", "silence_threshold",
+                    "min_consult_interval", "segments_trigger", "max_context_minutes"}
+    config = {k: v for k, v in data.items() if k in allowed_keys}
+    # Type coercion
+    for k in ("silence_threshold",):
+        if k in config:
+            config[k] = float(config[k])
+    for k in ("min_consult_interval", "segments_trigger", "max_context_minutes"):
+        if k in config:
+            config[k] = int(config[k])
+    db.update_client(client_id, client_config=json.dumps(config))
+    return JSONResponse({"ok": True, "config": config})
+
+
+@app.get("/api/clients/{client_id}/client-config")
+async def get_client_config(client_id: int):
+    client = db.get_client_by_id(client_id)
+    if not client:
+        return JSONResponse({"ok": False, "error": "No encontrado"}, status_code=404)
+    try:
+        config = json.loads(client.get("client_config", "{}") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        config = {}
+    defaults = {
+        "whisper_model": "small",
+        "whisper_language": "es",
+        "silence_threshold": 3.0,
+        "min_consult_interval": 15,
+        "segments_trigger": 3,
+        "max_context_minutes": 30,
+    }
+    return JSONResponse({"ok": True, "config": {**defaults, **config}})
+
+
 @app.post("/api/experts/{expert_slug}/package")
 async def package_expert(expert_slug: str):
     from distributor import package_expert_for_client

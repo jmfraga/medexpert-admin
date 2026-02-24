@@ -61,6 +61,21 @@
         .badge.red { background: #3f1219; color: #f87171; }
         .badge.amber { background: #92400e; color: #fbbf24; }
         .badge.blue { background: #1e3a5f; color: #60a5fa; }
+
+        .modal { max-width: 480px; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 0.78em; color: #94a3b8; margin-bottom: 4px; }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%; background: #1a2040; border: 1px solid #2a3050; border-radius: 6px;
+            color: #e0e6ed; padding: 6px 10px; font-size: 0.88em; font-family: inherit;
+        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: #f59e0b; }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
 {% endblock %}
 
 {% block content %}
@@ -104,6 +119,7 @@
                 </div>
 
                 <div class="client-actions">
+                    <button class="btn" onclick="openConfigModal({{ c.id }}, '{{ c.name }}')">Configurar</button>
                     <button class="btn primary" onclick="pushAll({{ c.id }})">Push todo</button>
                     <button class="btn" onclick="pushConfig({{ c.id }})">Push config</button>
                     <button class="btn" onclick="pushLicense({{ c.id }})">Push licencia</button>
@@ -151,6 +167,53 @@
             <div class="modal-actions">
                 <button class="btn" onclick="closeModal('createModal')">Cancelar</button>
                 <button class="btn primary" onclick="createClient()">Crear</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Client config modal -->
+    <div class="modal-overlay" id="configModal">
+        <div class="modal">
+            <h3>Configuracion del cliente: <span id="configClientName"></span></h3>
+            <input type="hidden" id="configClientId" value="">
+            <div class="config-grid">
+                <div class="form-group">
+                    <label>Modelo Whisper</label>
+                    <select id="cfgWhisperModel">
+                        <option value="tiny">tiny (rapido, menos preciso)</option>
+                        <option value="small" selected>small (balanceado)</option>
+                        <option value="medium">medium (preciso, mas lento)</option>
+                        <option value="large-v3">large-v3 (max precision)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Idioma Whisper</label>
+                    <select id="cfgWhisperLang">
+                        <option value="es" selected>Espanol</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Silencio (seg)</label>
+                    <input type="number" id="cfgSilence" value="3.0" step="0.5" min="1" max="10">
+                </div>
+                <div class="form-group">
+                    <label>Intervalo consulta (seg)</label>
+                    <input type="number" id="cfgConsultInterval" value="15" min="5" max="120">
+                </div>
+                <div class="form-group">
+                    <label>Segmentos para consultar</label>
+                    <input type="number" id="cfgSegments" value="3" min="1" max="20">
+                </div>
+                <div class="form-group">
+                    <label>Contexto max (min)</label>
+                    <input type="number" id="cfgMaxContext" value="30" min="5" max="120">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeModal('configModal')">Cancelar</button>
+                <button class="btn primary" id="btnSaveConfig" onclick="saveClientConfig()">Guardar</button>
+                <button class="btn success" onclick="saveAndPushConfig()">Guardar y Push</button>
             </div>
         </div>
     </div>
@@ -253,10 +316,66 @@
             else showToast(data.error, 'error');
         }
 
+        async function openConfigModal(clientId, clientName) {
+            document.getElementById('configClientId').value = clientId;
+            document.getElementById('configClientName').textContent = clientName;
+            // Load current config
+            const data = await apiCall(`/api/clients/${clientId}/client-config`);
+            if (data.ok) {
+                const c = data.config;
+                document.getElementById('cfgWhisperModel').value = c.whisper_model || 'small';
+                document.getElementById('cfgWhisperLang').value = c.whisper_language || 'es';
+                document.getElementById('cfgSilence').value = c.silence_threshold || 3.0;
+                document.getElementById('cfgConsultInterval').value = c.min_consult_interval || 15;
+                document.getElementById('cfgSegments').value = c.segments_trigger || 3;
+                document.getElementById('cfgMaxContext').value = c.max_context_minutes || 30;
+            }
+            document.getElementById('configModal').classList.add('show');
+        }
+
+        function getConfigValues() {
+            return {
+                whisper_model: document.getElementById('cfgWhisperModel').value,
+                whisper_language: document.getElementById('cfgWhisperLang').value,
+                silence_threshold: parseFloat(document.getElementById('cfgSilence').value),
+                min_consult_interval: parseInt(document.getElementById('cfgConsultInterval').value),
+                segments_trigger: parseInt(document.getElementById('cfgSegments').value),
+                max_context_minutes: parseInt(document.getElementById('cfgMaxContext').value),
+            };
+        }
+
+        async function saveClientConfig() {
+            const clientId = document.getElementById('configClientId').value;
+            const config = getConfigValues();
+            const data = await apiCall(`/api/clients/${clientId}/client-config`, 'POST', config);
+            if (data.ok) {
+                showToast('Configuracion guardada');
+                closeModal('configModal');
+            } else {
+                showToast(data.error, 'error');
+            }
+        }
+
+        async function saveAndPushConfig() {
+            const clientId = document.getElementById('configClientId').value;
+            const config = getConfigValues();
+            const data = await apiCall(`/api/clients/${clientId}/client-config`, 'POST', config);
+            if (data.ok) {
+                showToast('Guardado. Enviando config...');
+                closeModal('configModal');
+                const push = await apiCall(`/api/clients/${clientId}/push-config`, 'POST');
+                if (push.ok) showToast('Config enviado al cliente');
+                else showToast('Error enviando: ' + (push.error || ''), 'error');
+            } else {
+                showToast(data.error, 'error');
+            }
+        }
+
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 closeModal('createModal');
                 closeModal('assignModal');
+                closeModal('configModal');
             }
         });
     </script>

@@ -48,6 +48,7 @@ def init_db():
             license_expires TEXT,
             max_sessions_per_day INTEGER DEFAULT 50,
             notes TEXT DEFAULT '',
+            client_config TEXT DEFAULT '{}',
             last_seen TEXT DEFAULT NULL,
             created_at TEXT DEFAULT (datetime('now'))
         );
@@ -121,6 +122,12 @@ def init_db():
         );
     """)
     conn.commit()
+    # Migrations
+    try:
+        conn.execute("ALTER TABLE clients ADD COLUMN client_config TEXT DEFAULT '{}'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.close()
     console.print("[green]Database initialized[/green]")
 
@@ -232,7 +239,8 @@ def get_client_by_hostname(hostname: str) -> dict | None:
 def update_client(client_id: int, **kwargs):
     conn = get_connection()
     allowed = {"name", "hostname", "plan", "tailscale_ip", "status",
-               "license_expires", "max_sessions_per_day", "notes", "last_seen"}
+               "license_expires", "max_sessions_per_day", "notes", "last_seen",
+               "client_config"}
     updates, params = [], []
     for key, val in kwargs.items():
         if key in allowed and val is not None:

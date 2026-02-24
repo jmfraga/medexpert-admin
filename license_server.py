@@ -85,9 +85,9 @@ def generate_config(client_id: int) -> dict:
             "system_prompt": e.get("system_prompt", ""),
         })
 
-    config = {
-        "experts": experts_config,
-        "whisper_model": "medium",
+    # Defaults
+    defaults = {
+        "whisper_model": "small",
         "whisper_language": "es",
         "web_port": 8081,
         "tts_enabled": False,
@@ -95,6 +95,18 @@ def generate_config(client_id: int) -> dict:
         "max_context_minutes": 30,
         "min_consult_interval": 15,
         "segments_trigger": 3,
+    }
+
+    # Override with client-specific config
+    try:
+        client_cfg = json.loads(client.get("client_config", "{}") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        client_cfg = {}
+
+    config = {
+        "experts": experts_config,
+        **defaults,
+        **{k: v for k, v in client_cfg.items() if k in defaults},
     }
 
     return config
