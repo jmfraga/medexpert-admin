@@ -103,6 +103,12 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS distribution_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL,
@@ -484,3 +490,31 @@ def get_distribution_log(client_id: int = None, limit: int = 50) -> list[dict]:
         """, (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────
+# Settings
+# ─────────────────────────────────────────────
+
+def get_setting(key: str, default: str = "") -> str:
+    conn = get_connection()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+        ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = datetime('now')
+    """, (key, value, value))
+    conn.commit()
+    conn.close()
+
+
+def get_all_settings() -> dict:
+    conn = get_connection()
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    conn.close()
+    return {r["key"]: r["value"] for r in rows}

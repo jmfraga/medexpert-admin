@@ -37,6 +37,28 @@
 
         .config-value.present { color: #4ade80; }
         .config-value.missing { color: #f87171; }
+
+        .config-select {
+            background: #1a2040;
+            color: #e0e6ed;
+            border: 1px solid #2a3050;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.88em;
+            cursor: pointer;
+            font-family: inherit;
+            min-width: 220px;
+        }
+        .config-select:focus { outline: none; border-color: #f59e0b; }
+
+        .save-status {
+            font-size: 0.78em;
+            color: #4ade80;
+            margin-left: 8px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .save-status.show { opacity: 1; }
 {% endblock %}
 
 {% block content %}
@@ -66,6 +88,41 @@
         </div>
 
         <div class="config-section">
+            <h2>Modelo LLM default (clientes) <span class="save-status" id="modelSaveStatus">Guardado</span></h2>
+            <div class="config-row">
+                <span class="config-label">Provider</span>
+                <select class="config-select" id="providerSelect" onchange="onProviderChange()">
+                    {% for provider in available_models %}
+                    <option value="{{ provider }}" {% if provider == default_provider %}selected{% endif %}>
+                        {{ provider | capitalize }}
+                    </option>
+                    {% endfor %}
+                    {% if not available_models %}
+                    <option value="" disabled selected>Sin API keys configuradas</option>
+                    {% endif %}
+                </select>
+            </div>
+            <div class="config-row">
+                <span class="config-label">Modelo</span>
+                <select class="config-select" id="modelSelect" onchange="saveModelSettings()">
+                    {% for provider, models in available_models.items() %}
+                        {% for m in models %}
+                        <option value="{{ m.id }}" data-provider="{{ provider }}"
+                            {% if m.id == default_model %}selected{% endif %}
+                            {% if provider != default_provider %}style="display:none"{% endif %}>
+                            {{ m.name }} ({{ m.id }})
+                        </option>
+                        {% endfor %}
+                    {% endfor %}
+                </select>
+            </div>
+            <p style="font-size:0.78em; color:#475569; margin-top:8px;">
+                Este modelo se usara como default en las licencias nuevas.
+                Los clientes pueden cambiar el modelo desde su interfaz.
+            </p>
+        </div>
+
+        <div class="config-section">
             <h2>Informacion del sistema</h2>
             <div class="config-row">
                 <span class="config-label">Version</span>
@@ -81,4 +138,38 @@
             </div>
         </div>
     </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        function onProviderChange() {
+            const provider = document.getElementById('providerSelect').value;
+            const modelSel = document.getElementById('modelSelect');
+            let firstVisible = null;
+            for (const opt of modelSel.options) {
+                const show = opt.dataset.provider === provider;
+                opt.style.display = show ? '' : 'none';
+                if (show && !firstVisible) firstVisible = opt;
+            }
+            if (firstVisible) {
+                modelSel.value = firstVisible.value;
+            }
+            saveModelSettings();
+        }
+
+        function saveModelSettings() {
+            const provider = document.getElementById('providerSelect').value;
+            const model = document.getElementById('modelSelect').value;
+            if (!provider || !model) return;
+
+            apiCall('/api/settings/model', 'POST', { provider, model })
+                .then(data => {
+                    if (data.ok) {
+                        const status = document.getElementById('modelSaveStatus');
+                        status.classList.add('show');
+                        setTimeout(() => status.classList.remove('show'), 2000);
+                    }
+                });
+        }
+    </script>
 {% endblock %}

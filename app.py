@@ -430,16 +430,58 @@ async def validate_license(request: Request):
 # Config page
 # ─────────────────────────────────────────────
 
+AVAILABLE_MODELS = {
+    "anthropic": [
+        {"id": "claude-opus-4-6", "name": "Opus 4.6"},
+        {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6"},
+        {"id": "claude-sonnet-4-20250514", "name": "Sonnet 4"},
+        {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5"},
+    ],
+    "openai": [
+        {"id": "gpt-5.1", "name": "GPT-5.1"},
+        {"id": "gpt-4.1", "name": "GPT-4.1"},
+        {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini"},
+        {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano"},
+    ],
+}
+
+
 @app.get("/config", response_class=HTMLResponse)
 async def config_page(request: Request):
     api_keys = db.get_api_keys()
+    settings = db.get_all_settings()
+    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY"))
+    has_openai = bool(os.getenv("OPENAI_API_KEY"))
+    default_provider = settings.get("default_provider", "anthropic" if has_anthropic else "openai")
+    default_model = settings.get("default_model", "claude-sonnet-4-20250514" if has_anthropic else "gpt-4.1")
+    # Build available models based on configured keys
+    models = {}
+    if has_anthropic:
+        models["anthropic"] = AVAILABLE_MODELS["anthropic"]
+    if has_openai:
+        models["openai"] = AVAILABLE_MODELS["openai"]
     return templates.TemplateResponse("config.html", {
         "request": request,
         "active_page": "config",
         "api_keys": api_keys,
-        "anthropic_key": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "openai_key": bool(os.getenv("OPENAI_API_KEY")),
+        "anthropic_key": has_anthropic,
+        "openai_key": has_openai,
+        "default_provider": default_provider,
+        "default_model": default_model,
+        "available_models": models,
     })
+
+
+@app.post("/api/settings/model")
+async def save_model_settings(request: Request):
+    data = await request.json()
+    provider = data.get("provider", "")
+    model = data.get("model", "")
+    if not provider or not model:
+        return JSONResponse({"ok": False, "error": "Provider y modelo requeridos"}, status_code=400)
+    db.set_setting("default_provider", provider)
+    db.set_setting("default_model", model)
+    return JSONResponse({"ok": True, "provider": provider, "model": model})
 
 
 # ─────────────────────────────────────────────

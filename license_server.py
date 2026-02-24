@@ -44,7 +44,8 @@ def generate_license(client_id: int, duration_days: int = 365) -> dict:
         "admin_server": client.get("tailscale_ip", ""),
         "offline_grace_days": 7,
         "api_keys": _get_api_keys_for_client(client),
-        "default_provider": "anthropic",
+        "default_provider": db.get_setting("default_provider", "anthropic"),
+        "default_model": db.get_setting("default_model", "claude-sonnet-4-20250514"),
     }
 
     return license_data
