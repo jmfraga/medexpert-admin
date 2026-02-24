@@ -584,7 +584,7 @@ async def test_api_connection(request: Request):
     api_key = data.get("api_key", "").strip()
 
     # Use provided key or fall back to env
-    if not api_key or not api_key.startswith("sk-"):
+    if not api_key or "*" in api_key:
         api_key = os.getenv(
             "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY", ""
         )
