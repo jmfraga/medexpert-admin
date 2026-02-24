@@ -59,6 +59,39 @@
             transition: opacity 0.3s;
         }
         .save-status.show { opacity: 1; }
+
+        .config-input {
+            background: #1a2040;
+            color: #e0e6ed;
+            border: 1px solid #2a3050;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.85em;
+            font-family: monospace;
+            width: 340px;
+        }
+        .config-input:focus { outline: none; border-color: #f59e0b; }
+        .config-input::placeholder { color: #475569; }
+
+        .key-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 0;
+            border-bottom: 1px solid #1e2640;
+        }
+        .key-row:last-child { border-bottom: none; }
+        .key-row .config-label { min-width: 160px; flex-shrink: 0; }
+
+        .test-result {
+            font-size: 0.78em;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        .test-result.ok { background: #14532d; color: #4ade80; }
+        .test-result.fail { background: #3f1219; color: #f87171; }
+        .test-result.testing { background: #1a1500; color: #f59e0b; }
 {% endblock %}
 
 {% block content %}
@@ -68,23 +101,31 @@
         </div>
 
         <div class="config-section">
-            <h2>API Keys (Entorno)</h2>
-            <div class="config-row">
+            <h2>API Keys <span class="save-status" id="keySaveStatus">Guardado</span></h2>
+            <div class="key-row">
                 <span class="config-label">ANTHROPIC_API_KEY</span>
-                <span class="config-value {% if anthropic_key %}present{% else %}missing{% endif %}">
-                    {% if anthropic_key %}Configurada{% else %}No configurada{% endif %}
-                </span>
+                <input type="password" class="config-input" id="anthropicKey"
+                    value="{{ anthropic_key_masked }}"
+                    placeholder="sk-ant-...">
+                <button class="btn" onclick="toggleKeyVisibility('anthropicKey')">Ver</button>
+                <button class="btn primary" onclick="testApi('anthropic')">Probar</button>
+                <span class="test-result" id="testAnthropicResult"></span>
             </div>
-            <div class="config-row">
+            <div class="key-row">
                 <span class="config-label">OPENAI_API_KEY</span>
-                <span class="config-value {% if openai_key %}present{% else %}missing{% endif %}">
-                    {% if openai_key %}Configurada{% else %}No configurada{% endif %}
+                <input type="password" class="config-input" id="openaiKey"
+                    value="{{ openai_key_masked }}"
+                    placeholder="sk-...">
+                <button class="btn" onclick="toggleKeyVisibility('openaiKey')">Ver</button>
+                <button class="btn primary" onclick="testApi('openai')">Probar</button>
+                <span class="test-result" id="testOpenaiResult"></span>
+            </div>
+            <div style="margin-top:12px; display:flex; gap:8px; align-items:center;">
+                <button class="btn success" onclick="saveApiKeys()">Guardar API Keys</button>
+                <span style="font-size:0.78em; color:#475569;">
+                    Se guardan en .env y aplican al reiniciar. Se inyectan en licencias de clientes.
                 </span>
             </div>
-            <p style="font-size:0.78em; color:#475569; margin-top:8px;">
-                Las API keys se configuran en el archivo .env del servidor admin.
-                Se inyectan automaticamente en las licencias de los clientes.
-            </p>
         </div>
 
         <div class="config-section">
@@ -169,6 +210,57 @@
                         status.classList.add('show');
                         setTimeout(() => status.classList.remove('show'), 2000);
                     }
+                });
+        }
+
+        function toggleKeyVisibility(inputId) {
+            const input = document.getElementById(inputId);
+            input.type = input.type === 'password' ? 'text' : 'password';
+        }
+
+        function saveApiKeys() {
+            const anthropic = document.getElementById('anthropicKey').value.trim();
+            const openai = document.getElementById('openaiKey').value.trim();
+
+            apiCall('/api/settings/api-keys', 'POST', {
+                anthropic_key: anthropic,
+                openai_key: openai,
+            }).then(data => {
+                if (data.ok) {
+                    const status = document.getElementById('keySaveStatus');
+                    status.classList.add('show');
+                    setTimeout(() => status.classList.remove('show'), 2000);
+                } else {
+                    alert('Error: ' + (data.error || 'desconocido'));
+                }
+            });
+        }
+
+        function testApi(provider) {
+            const resultEl = document.getElementById(
+                provider === 'anthropic' ? 'testAnthropicResult' : 'testOpenaiResult'
+            );
+            const keyInput = document.getElementById(
+                provider === 'anthropic' ? 'anthropicKey' : 'openaiKey'
+            );
+            const key = keyInput.value.trim();
+
+            resultEl.textContent = 'Probando...';
+            resultEl.className = 'test-result testing';
+
+            apiCall('/api/settings/test-api', 'POST', { provider, api_key: key })
+                .then(data => {
+                    if (data.ok) {
+                        resultEl.textContent = 'OK - ' + data.model + ' (' + data.time + ')';
+                        resultEl.className = 'test-result ok';
+                    } else {
+                        resultEl.textContent = 'Error: ' + (data.error || 'fallo');
+                        resultEl.className = 'test-result fail';
+                    }
+                })
+                .catch(err => {
+                    resultEl.textContent = 'Error: ' + err.message;
+                    resultEl.className = 'test-result fail';
                 });
         }
     </script>

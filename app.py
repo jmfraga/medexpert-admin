@@ -460,12 +460,23 @@ async def config_page(request: Request):
         models["anthropic"] = AVAILABLE_MODELS["anthropic"]
     if has_openai:
         models["openai"] = AVAILABLE_MODELS["openai"]
+    # Mask keys for display (show first 7 + last 4 chars)
+    def mask_key(key: str) -> str:
+        if not key or len(key) < 12:
+            return ""
+        return key[:7] + "*" * (len(key) - 11) + key[-4:]
+
+    anthropic_raw = os.getenv("ANTHROPIC_API_KEY", "")
+    openai_raw = os.getenv("OPENAI_API_KEY", "")
+
     return templates.TemplateResponse("config.html", {
         "request": request,
         "active_page": "config",
         "api_keys": api_keys,
         "anthropic_key": has_anthropic,
         "openai_key": has_openai,
+        "anthropic_key_masked": mask_key(anthropic_raw),
+        "openai_key_masked": mask_key(openai_raw),
         "default_provider": default_provider,
         "default_model": default_model,
         "available_models": models,
@@ -482,6 +493,106 @@ async def save_model_settings(request: Request):
     db.set_setting("default_provider", provider)
     db.set_setting("default_model", model)
     return JSONResponse({"ok": True, "provider": provider, "model": model})
+
+
+@app.post("/api/settings/api-keys")
+async def save_api_keys(request: Request):
+    """Save API keys to .env file and update environment."""
+    data = await request.json()
+    anthropic_key = data.get("anthropic_key", "").strip()
+    openai_key = data.get("openai_key", "").strip()
+
+    # Skip masked values (don't overwrite with asterisks)
+    if anthropic_key and not anthropic_key.startswith("sk-"):
+        anthropic_key = ""
+    if openai_key and not openai_key.startswith("sk-"):
+        openai_key = ""
+
+    # Read existing .env
+    env_path = Path(".env")
+    env_lines = []
+    if env_path.exists():
+        env_lines = env_path.read_text().splitlines()
+
+    # Update or add keys
+    def update_env(lines, key, value):
+        found = False
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}=") or line.startswith(f"# {key}="):
+                if value:
+                    lines[i] = f"{key}={value}"
+                found = True
+                break
+        if not found and value:
+            lines.append(f"{key}={value}")
+        return lines
+
+    if anthropic_key:
+        env_lines = update_env(env_lines, "ANTHROPIC_API_KEY", anthropic_key)
+        os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+    if openai_key:
+        env_lines = update_env(env_lines, "OPENAI_API_KEY", openai_key)
+        os.environ["OPENAI_API_KEY"] = openai_key
+
+    env_path.write_text("\n".join(env_lines) + "\n")
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/settings/test-api")
+async def test_api_connection(request: Request):
+    """Test an API key by making a minimal LLM call."""
+    import time as _time
+    data = await request.json()
+    provider = data.get("provider", "")
+    api_key = data.get("api_key", "").strip()
+
+    # Use provided key or fall back to env
+    if not api_key or not api_key.startswith("sk-"):
+        api_key = os.getenv(
+            "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY", ""
+        )
+
+    if not api_key:
+        return JSONResponse({"ok": False, "error": "No API key"})
+
+    start = _time.time()
+    try:
+        if provider == "anthropic":
+            from anthropic import Anthropic
+            client = Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=10,
+                messages=[{"role": "user", "content": "Responde solo 'OK'"}],
+                timeout=15.0,
+            )
+            elapsed = _time.time() - start
+            return JSONResponse({
+                "ok": True,
+                "model": "claude-haiku-4-5-20251001",
+                "response": resp.content[0].text,
+                "time": f"{elapsed:.1f}s",
+            })
+        elif provider == "openai":
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            resp = client.chat.completions.create(
+                model="gpt-4.1-nano",
+                max_tokens=10,
+                messages=[{"role": "user", "content": "Responde solo 'OK'"}],
+                timeout=15.0,
+            )
+            elapsed = _time.time() - start
+            return JSONResponse({
+                "ok": True,
+                "model": "gpt-4.1-nano",
+                "response": resp.choices[0].message.content,
+                "time": f"{elapsed:.1f}s",
+            })
+        else:
+            return JSONResponse({"ok": False, "error": f"Provider desconocido: {provider}"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
 
 
 # ─────────────────────────────────────────────
