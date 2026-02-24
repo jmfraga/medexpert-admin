@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MedExpert Admin{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="theme-color" content="#0a0e1a">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0a0e1a;
+            color: #e0e6ed;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            position: fixed;
+            top: 0; left: 0;
+            width: 200px;
+            height: 100vh;
+            background: linear-gradient(180deg, #1a1f3a, #0d1225);
+            border-right: 1px solid #2a3050;
+            display: flex;
+            flex-direction: column;
+            z-index: 200;
+        }
+
+        .sidebar-brand {
+            padding: 16px;
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #f59e0b;
+            text-decoration: none;
+            border-bottom: 1px solid #2a3050;
+        }
+
+        .sidebar-brand span { color: #64748b; }
+
+        .sidebar-nav {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 8px 0;
+            gap: 2px;
+        }
+
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            color: #94a3b8;
+            text-decoration: none;
+            font-size: 0.85em;
+            font-weight: 500;
+            border-left: 3px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .sidebar-link:hover {
+            color: #e0e6ed;
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .sidebar-link.active {
+            color: #f59e0b;
+            border-left-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.08);
+        }
+
+        .sidebar-link .icon { width: 20px; text-align: center; flex-shrink: 0; font-size: 1.1em; }
+
+        .sidebar-footer {
+            padding: 12px 16px;
+            border-top: 1px solid #2a3050;
+            font-size: 0.72em;
+            color: #475569;
+        }
+
+        .main-content {
+            margin-left: 200px;
+            min-height: 100vh;
+        }
+
+        .btn {
+            padding: 6px 14px;
+            border-radius: 6px;
+            border: 1px solid #2a3050;
+            background: #1a2040;
+            color: #94a3b8;
+            font-size: 0.8em;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .btn:hover { background: #253060; color: #e0e6ed; }
+        .btn.primary { background: #92400e; color: #f59e0b; border-color: #b45309; }
+        .btn.primary:hover { background: #b45309; color: #fbbf24; }
+        .btn.success { background: #14532d; color: #4ade80; border-color: #166534; }
+        .btn.danger { background: #3f1219; color: #f87171; border-color: #7f1d1d; }
+        .btn.warning { background: #1a1500; color: #f59e0b; border-color: #92400e; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .status-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+
+        .status-dot.active { background: #22c55e; }
+        .status-dot.inactive { background: #ef4444; }
+        .status-dot.warning { background: #f59e0b; }
+
+        .toast {
+            position: fixed;
+            top: 20px; right: 20px;
+            background: #166534;
+            color: #4ade80;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 0.85em;
+            z-index: 1000;
+            animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+        }
+
+        @keyframes toastIn { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; } }
+        @keyframes toastOut { to { opacity: 0; transform: translateY(-20px); } }
+
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 500; justify-content: center; align-items: center; }
+        .modal-overlay.show { display: flex; }
+        .modal { background: #151b30; border: 1px solid #2a3050; border-radius: 12px; padding: 24px; width: 90%; max-width: 500px; }
+        .modal h3 { color: #f59e0b; margin-bottom: 16px; font-size: 1em; }
+        .modal .form-group { margin-bottom: 12px; }
+        .modal label { display: block; font-size: 0.78em; color: #64748b; margin-bottom: 4px; }
+        .modal input, .modal textarea, .modal select { width: 100%; background: #1a2040; border: 1px solid #2a3050; border-radius: 6px; color: #e0e6ed; padding: 8px 12px; font-size: 0.88em; font-family: inherit; }
+        .modal input:focus, .modal textarea:focus, .modal select:focus { outline: none; border-color: #f59e0b; }
+        .modal textarea { resize: vertical; min-height: 60px; }
+        .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #2a3050; border-radius: 2px; }
+
+        {% block extra_styles %}{% endblock %}
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <a href="/" class="sidebar-brand">
+            MedExpert <span>Admin</span>
+        </a>
+
+        <nav class="sidebar-nav">
+            <a href="/" class="sidebar-link {% if active_page == 'dashboard' %}active{% endif %}">
+                <span class="icon">&#9673;</span>
+                <span>Dashboard</span>
+            </a>
+            <a href="/experts" class="sidebar-link {% if active_page == 'experts' %}active{% endif %}">
+                <span class="icon">&#9733;</span>
+                <span>Expertos</span>
+            </a>
+            <a href="/clients" class="sidebar-link {% if active_page == 'clients' %}active{% endif %}">
+                <span class="icon">&#9783;</span>
+                <span>Clientes</span>
+            </a>
+            <a href="/config" class="sidebar-link {% if active_page == 'config' %}active{% endif %}">
+                <span class="icon">&#9881;</span>
+                <span>Configuracion</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            MedExpert Admin v2.0
+        </div>
+    </aside>
+
+    <div class="main-content">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+        function showToast(message, type) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            if (type === 'error') {
+                toast.style.background = '#7f1d1d';
+                toast.style.color = '#f87171';
+            }
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        async function apiCall(url, method = 'GET', body = null) {
+            const opts = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) opts.body = JSON.stringify(body);
+            const res = await fetch(url, opts);
+            return res.json();
+        }
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

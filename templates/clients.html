@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+
+{% block title %}MedExpert Admin - Clientes{% endblock %}
+
+{% block extra_styles %}
+        .page-content { padding: 24px; max-width: 1100px; margin: 0 auto; }
+        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .page-header h1 { font-size: 1.3em; color: #f59e0b; }
+
+        .client-list { display: flex; flex-direction: column; gap: 12px; }
+
+        .client-card {
+            background: #111827;
+            border: 1px solid #1e2640;
+            border-radius: 10px;
+            padding: 16px 20px;
+        }
+
+        .client-card:hover { border-color: #2a3050; }
+
+        .client-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .client-name { font-weight: 600; color: #e0e6ed; font-size: 1em; }
+
+        .client-meta {
+            font-size: 0.78em; color: #64748b;
+            display: flex; gap: 12px; flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .client-experts {
+            display: flex; gap: 6px; flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .expert-tag {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+            background: #1e3a5f;
+            color: #60a5fa;
+            border: 1px solid #2563eb;
+        }
+
+        .expert-tag .remove {
+            cursor: pointer;
+            color: #ef4444;
+            font-weight: 700;
+            margin-left: 4px;
+        }
+
+        .client-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.72em; font-weight: 600; }
+        .badge.green { background: #14532d; color: #4ade80; }
+        .badge.red { background: #3f1219; color: #f87171; }
+        .badge.amber { background: #92400e; color: #fbbf24; }
+        .badge.blue { background: #1e3a5f; color: #60a5fa; }
+{% endblock %}
+
+{% block content %}
+    <div class="page-content">
+        <div class="page-header">
+            <h1>Clientes</h1>
+            <button class="btn primary" onclick="openCreateModal()">+ Nuevo cliente</button>
+        </div>
+
+        <div class="client-list">
+            {% for c in clients %}
+            <div class="client-card" data-id="{{ c.id }}">
+                <div class="client-header">
+                    <span class="client-name">{{ c.name }}</span>
+                    <span class="badge {% if c.status == 'active' %}green{% elif c.status == 'suspended' %}red{% else %}blue{% endif %}">
+                        {{ c.status }}
+                    </span>
+                </div>
+                <div class="client-meta">
+                    <span>{{ c.hostname }}</span>
+                    <span>Plan: {{ c.plan }}</span>
+                    {% if c.tailscale_ip %}<span>IP: {{ c.tailscale_ip }}</span>{% endif %}
+                    {% if c.license_expires %}<span>Expira: {{ c.license_expires[:10] }}</span>{% endif %}
+                    {% if c.last_seen %}<span>Visto: {{ c.last_seen[:16] }}</span>{% endif %}
+                </div>
+
+                <div class="client-experts">
+                    {% for e in c.assigned_experts %}
+                    <span class="expert-tag">
+                        {{ e.name }}
+                        {% if e.last_synced %}
+                        <span style="color:#64748b; font-weight:400; font-size:0.9em;">
+                            (sync: {{ e.last_synced[:10] }})
+                        </span>
+                        {% endif %}
+                        <span class="remove" onclick="removeExpert({{ c.id }}, {{ e.id }})">&times;</span>
+                    </span>
+                    {% endfor %}
+                    <button class="btn" style="padding:2px 8px; font-size:0.72em;"
+                            onclick="openAssignModal({{ c.id }})">+ Experto</button>
+                </div>
+
+                <div class="client-actions">
+                    <button class="btn primary" onclick="pushAll({{ c.id }})">Push todo</button>
+                    <button class="btn" onclick="pushConfig({{ c.id }})">Push config</button>
+                    <button class="btn" onclick="pushLicense({{ c.id }})">Push licencia</button>
+                    <button class="btn warning" onclick="viewLicense({{ c.id }})">Ver licencia</button>
+                    <button class="btn danger" onclick="deleteClient({{ c.id }}, '{{ c.name }}')">Eliminar</button>
+                </div>
+            </div>
+            {% endfor %}
+            {% if not clients %}
+            <div style="text-align:center; padding:40px; color:#475569;">
+                No hay clientes registrados.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Create client modal -->
+    <div class="modal-overlay" id="createModal">
+        <div class="modal">
+            <h3>Nuevo cliente</h3>
+            <div class="form-group">
+                <label>Nombre</label>
+                <input type="text" id="clientName" placeholder="Ej: Dr. Garcia - Consultorio">
+            </div>
+            <div class="form-group">
+                <label>Hostname</label>
+                <input type="text" id="clientHostname" placeholder="Ej: rpi-garcia">
+            </div>
+            <div class="form-group">
+                <label>Plan</label>
+                <select id="clientPlan">
+                    <option value="basico">Basico</option>
+                    <option value="profesional" selected>Profesional</option>
+                    <option value="enterprise">Enterprise</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Tailscale IP</label>
+                <input type="text" id="clientIP" placeholder="Ej: 100.64.0.5">
+            </div>
+            <div class="form-group">
+                <label>Notas</label>
+                <textarea id="clientNotes" rows="2" placeholder="Notas opcionales..."></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeModal('createModal')">Cancelar</button>
+                <button class="btn primary" onclick="createClient()">Crear</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Assign expert modal -->
+    <div class="modal-overlay" id="assignModal">
+        <div class="modal">
+            <h3>Asignar experto</h3>
+            <input type="hidden" id="assignClientId" value="">
+            <div class="form-group">
+                <label>Experto</label>
+                <select id="assignExpertId">
+                    {% for e in experts %}
+                    <option value="{{ e.id }}">{{ e.name }} ({{ e.slug }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeModal('assignModal')">Cancelar</button>
+                <button class="btn primary" onclick="assignExpert()">Asignar</button>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        function openCreateModal() {
+            document.getElementById('createModal').classList.add('show');
+            document.getElementById('clientName').focus();
+        }
+
+        function openAssignModal(clientId) {
+            document.getElementById('assignClientId').value = clientId;
+            document.getElementById('assignModal').classList.add('show');
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('show');
+        }
+
+        async function createClient() {
+            const body = {
+                name: document.getElementById('clientName').value.trim(),
+                hostname: document.getElementById('clientHostname').value.trim(),
+                plan: document.getElementById('clientPlan').value,
+                tailscale_ip: document.getElementById('clientIP').value.trim(),
+                notes: document.getElementById('clientNotes').value,
+            };
+            if (!body.name || !body.hostname) { showToast('Nombre y hostname requeridos', 'error'); return; }
+            const data = await apiCall('/api/clients', 'POST', body);
+            if (data.ok) { showToast('Cliente creado'); location.reload(); }
+            else showToast(data.error, 'error');
+        }
+
+        async function assignExpert() {
+            const clientId = document.getElementById('assignClientId').value;
+            const expertId = document.getElementById('assignExpertId').value;
+            const data = await apiCall(`/api/clients/${clientId}/assign-expert`, 'POST', { expert_id: parseInt(expertId) });
+            if (data.ok) { showToast('Experto asignado'); location.reload(); }
+            else showToast(data.error, 'error');
+        }
+
+        async function removeExpert(clientId, expertId) {
+            if (!confirm('Quitar este experto del cliente?')) return;
+            const data = await apiCall(`/api/clients/${clientId}/experts/${expertId}`, 'DELETE');
+            if (data.ok) { showToast('Experto removido'); location.reload(); }
+            else showToast(data.error, 'error');
+        }
+
+        async function pushAll(clientId) {
+            if (!confirm('Enviar todo (licencia, config, ChromaDB) al cliente?')) return;
+            showToast('Enviando...');
+            const data = await apiCall(`/api/clients/${clientId}/push-all`, 'POST');
+            if (data.ok) showToast('Todo enviado');
+            else showToast('Error parcial - revisa logs', 'error');
+        }
+
+        async function pushConfig(clientId) {
+            const data = await apiCall(`/api/clients/${clientId}/push-config`, 'POST');
+            if (data.ok) showToast('Config enviado');
+            else showToast(data.error, 'error');
+        }
+
+        async function pushLicense(clientId) {
+            const data = await apiCall(`/api/clients/${clientId}/push-license`, 'POST');
+            if (data.ok) showToast('Licencia enviada');
+            else showToast(data.error, 'error');
+        }
+
+        async function viewLicense(clientId) {
+            const data = await apiCall(`/api/clients/${clientId}/license`);
+            alert(JSON.stringify(data, null, 2));
+        }
+
+        async function deleteClient(clientId, name) {
+            if (!confirm(`Eliminar cliente "${name}"?`)) return;
+            const data = await apiCall(`/api/clients/${clientId}`, 'DELETE');
+            if (data.ok) { showToast('Cliente eliminado'); location.reload(); }
+            else showToast(data.error, 'error');
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeModal('createModal');
+                closeModal('assignModal');
+            }
+        });
+    </script>
+{% endblock %}

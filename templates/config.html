@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}MedExpert Admin - Configuracion{% endblock %}
+
+{% block extra_styles %}
+        .page-content { padding: 24px; max-width: 900px; margin: 0 auto; }
+        .page-header h1 { font-size: 1.3em; color: #f59e0b; margin-bottom: 20px; }
+
+        .config-section {
+            background: #111827;
+            border: 1px solid #1e2640;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .config-section h2 {
+            font-size: 0.95em;
+            color: #94a3b8;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .config-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #1e2640;
+            font-size: 0.88em;
+        }
+
+        .config-row:last-child { border-bottom: none; }
+
+        .config-label { color: #94a3b8; }
+        .config-value { color: #e0e6ed; font-family: monospace; font-size: 0.9em; }
+
+        .config-value.present { color: #4ade80; }
+        .config-value.missing { color: #f87171; }
+{% endblock %}
+
+{% block content %}
+    <div class="page-content">
+        <div class="page-header">
+            <h1>Configuracion</h1>
+        </div>
+
+        <div class="config-section">
+            <h2>API Keys (Entorno)</h2>
+            <div class="config-row">
+                <span class="config-label">ANTHROPIC_API_KEY</span>
+                <span class="config-value {% if anthropic_key %}present{% else %}missing{% endif %}">
+                    {% if anthropic_key %}Configurada{% else %}No configurada{% endif %}
+                </span>
+            </div>
+            <div class="config-row">
+                <span class="config-label">OPENAI_API_KEY</span>
+                <span class="config-value {% if openai_key %}present{% else %}missing{% endif %}">
+                    {% if openai_key %}Configurada{% else %}No configurada{% endif %}
+                </span>
+            </div>
+            <p style="font-size:0.78em; color:#475569; margin-top:8px;">
+                Las API keys se configuran en el archivo .env del servidor admin.
+                Se inyectan automaticamente en las licencias de los clientes.
+            </p>
+        </div>
+
+        <div class="config-section">
+            <h2>Informacion del sistema</h2>
+            <div class="config-row">
+                <span class="config-label">Version</span>
+                <span class="config-value">MedExpert Admin v2.0</span>
+            </div>
+            <div class="config-row">
+                <span class="config-label">Base de datos</span>
+                <span class="config-value">data/medexpert_admin.db</span>
+            </div>
+            <div class="config-row">
+                <span class="config-label">Directorio de expertos</span>
+                <span class="config-value">data/experts/</span>
+            </div>
+        </div>
+    </div>
+{% endblock %}

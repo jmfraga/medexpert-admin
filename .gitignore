@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment
+.env
+
+# Data
+data/experts/*/chromadb/
+data/experts/*/guides/
+data/experts/*/sessions/
+data/clients/
+data/packages/
+data/*.db
+
+# Scraper downloads
+scraper/downloads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
