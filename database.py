@@ -90,6 +90,8 @@ def init_db():
             login_username TEXT DEFAULT '',
             login_password TEXT DEFAULT '',
             url_exclude TEXT DEFAULT '',
+            use_browser INTEGER DEFAULT 0,
+            allowed_domains TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (expert_id) REFERENCES experts(id) ON DELETE CASCADE,
             UNIQUE(expert_id, url)
@@ -122,6 +124,17 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # Migrations
+    for col, defn in [
+        ("use_browser", "INTEGER DEFAULT 0"),
+        ("allowed_domains", "TEXT DEFAULT ''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE web_sources ADD COLUMN {col} {defn}")
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
     # Migrations
     try:
         conn.execute("ALTER TABLE clients ADD COLUMN client_config TEXT DEFAULT '{}'")
@@ -325,7 +338,9 @@ def create_web_source(expert_id: int, name: str, url: str, source_type: str = "p
                       css_selector_version: str = "", version_regex: str = "",
                       notes: str = "", crawl_depth: int = 0, url_pattern: str = "",
                       login_url: str = "", login_username: str = "",
-                      login_password: str = "", url_exclude: str = "") -> int:
+                      login_password: str = "", url_exclude: str = "",
+                      use_browser: int = 0,
+                      allowed_domains: str = "") -> int:
     conn = get_connection()
     try:
         cursor = conn.execute("""
@@ -333,12 +348,12 @@ def create_web_source(expert_id: int, name: str, url: str, source_type: str = "p
                                      css_selector_content, css_selector_version,
                                      version_regex, notes, crawl_depth, url_pattern,
                                      login_url, login_username, login_password,
-                                     url_exclude)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     url_exclude, use_browser, allowed_domains)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (expert_id, name, url, source_type, category,
               css_selector_content, css_selector_version, version_regex, notes,
               crawl_depth, url_pattern, login_url, login_username, login_password,
-              url_exclude))
+              url_exclude, use_browser, allowed_domains))
         conn.commit()
         return cursor.lastrowid
     finally:

@@ -145,7 +145,70 @@
         </div>
 
         <div class="section">
-            <div class="section-title">Fuentes web ({{ sources|length }})</div>
+            <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
+                Fuentes web ({{ sources|length }})
+                <button class="btn primary" onclick="document.getElementById('addSourceForm').style.display = document.getElementById('addSourceForm').style.display === 'none' ? 'block' : 'none'">+ Agregar fuente</button>
+            </div>
+
+            <div id="addSourceForm" style="display:none; background:#111827; border:1px solid #1e2640; border-radius:8px; padding:16px; margin-bottom:12px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Nombre</label>
+                        <input type="text" id="srcName" placeholder="ESMO Breast Cancer" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">URL</label>
+                        <input type="text" id="srcUrl" placeholder="https://www.esmo.org/guidelines/..." style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Tipo</label>
+                        <select id="srcType" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                            <option value="public">Publico</option>
+                            <option value="monitor">Monitor version</option>
+                            <option value="authenticated">Autenticado</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Categoria</label>
+                        <input type="text" id="srcCategory" placeholder="oncologia" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Profundidad crawl</label>
+                        <input type="number" id="srcDepth" value="0" min="0" max="5" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                    </div>
+                </div>
+                <div style="margin-bottom:10px;">
+                    <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Selector CSS (contenido)</label>
+                    <input type="text" id="srcCss" placeholder="article, .guideline-content, main" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Patron URL (regex para links)</label>
+                        <input type="text" id="srcPattern" placeholder="guidelines.*breast" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Excluir URL (regex)</label>
+                        <input type="text" id="srcExclude" placeholder="login|subscribe" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                    </div>
+                </div>
+                <div style="margin-bottom:10px;">
+                    <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Dominios externos permitidos (separados por coma)</label>
+                    <input type="text" id="srcDomains" placeholder="annalsofoncology.org, thelancet.com" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                </div>
+                <div style="display:flex; gap:8px; justify-content:space-between; align-items:center;">
+                    <label style="font-size:0.82em; color:#94a3b8; display:flex; align-items:center; gap:6px; cursor:pointer;">
+                        <input type="checkbox" id="srcBrowser" style="accent-color:#f59e0b;">
+                        Usar browser (sitios SPA/JavaScript)
+                    </label>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn" onclick="document.getElementById('addSourceForm').style.display='none'">Cancelar</button>
+                        <button class="btn primary" onclick="addSource()">Guardar y descargar</button>
+                    </div>
+                </div>
+            </div>
+
             <div class="source-list">
                 {% for s in sources %}
                 <div class="source-row">
@@ -213,6 +276,34 @@
             const data = await apiCall(`/api/web-sources/${sourceId}/fetch`, 'POST');
             if (data.ok) { showToast('Descarga completada'); location.reload(); }
             else showToast(data.error || 'Error', 'error');
+        }
+
+        async function addSource() {
+            const name = document.getElementById('srcName').value.trim();
+            const url = document.getElementById('srcUrl').value.trim();
+            if (!name || !url) { showToast('Nombre y URL requeridos', 'error'); return; }
+
+            showToast('Creando fuente...');
+            const data = await apiCall('/api/web-sources', 'POST', {
+                expert_id: EXPERT_ID,
+                name: name,
+                url: url,
+                source_type: document.getElementById('srcType').value,
+                category: document.getElementById('srcCategory').value.trim(),
+                crawl_depth: parseInt(document.getElementById('srcDepth').value) || 0,
+                css_selector_content: document.getElementById('srcCss').value.trim(),
+                url_pattern: document.getElementById('srcPattern').value.trim(),
+                url_exclude: document.getElementById('srcExclude').value.trim(),
+                use_browser: document.getElementById('srcBrowser').checked,
+                allowed_domains: document.getElementById('srcDomains').value.trim(),
+            });
+            if (!data.ok) { showToast(data.error || 'Error', 'error'); return; }
+
+            showToast('Fuente creada. Descargando...');
+            const fetchResult = await apiCall(`/api/web-sources/${data.id}/fetch`, 'POST');
+            if (fetchResult.ok) showToast('Descarga completada');
+            else showToast(fetchResult.error || 'Error al descargar', 'error');
+            setTimeout(() => location.reload(), 1500);
         }
 
         async function deleteSource(sourceId) {

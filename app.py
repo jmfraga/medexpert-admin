@@ -227,6 +227,8 @@ async def create_web_source(request: Request):
             login_username=data.get("login_username", ""),
             login_password=data.get("login_password", ""),
             url_exclude=data.get("url_exclude", ""),
+            use_browser=1 if data.get("use_browser") else 0,
+            allowed_domains=data.get("allowed_domains", ""),
         )
         return JSONResponse({"ok": True, "id": source_id})
     except Exception as e:
@@ -245,13 +247,13 @@ async def fetch_web_source(source_id: int):
         return JSONResponse({"ok": False, "error": "Expert not found"}, status_code=404)
 
     try:
-        from web_scraper import WebScraper
-        scraper = WebScraper()
+        from web_scraper import GuidelineScraper
+        scraper = GuidelineScraper()
         rag = get_rag_for_expert(expert["slug"])
         guides_dir = Path(f"data/experts/{expert['slug']}/guides")
         guides_dir.mkdir(parents=True, exist_ok=True)
 
-        result = scraper.fetch_source(source, str(guides_dir), rag)
+        result = await scraper.fetch_and_index(source, rag, expert["slug"])
         db.update_web_source_status(
             source_id,
             status="active" if result.get("ok") else "error",

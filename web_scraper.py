@@ -194,14 +194,16 @@ def _extract_version(html: str, css_selector_version: str, version_regex: str) -
 
 
 def _extract_links(html: str, base_url: str, url_pattern: str = "",
-                    url_exclude: str = "") -> list[str]:
+                    url_exclude: str = "", allowed_domains: list[str] = None) -> list[str]:
     """Extract and filter links from HTML page.
-    Only follows links on the same domain. Optionally filters by url_pattern regex.
-    Optionally excludes links matching url_exclude regex.
+    By default only follows links on the same domain.
+    allowed_domains: extra domains to follow (e.g. ['annalsofoncology.org']).
+    Optionally filters by url_pattern regex and excludes by url_exclude regex.
     """
     soup = BeautifulSoup(html, "lxml")
     parsed_base = urlparse(base_url)
     base_domain = parsed_base.netloc
+    extra_domains = set(allowed_domains or [])
     seen = set()
     links = []
 
@@ -220,8 +222,9 @@ def _extract_links(html: str, base_url: str, url_pattern: str = "",
         if not href:
             continue
 
-        # Same domain only
-        if urlparse(href).netloc != base_domain:
+        # Same domain or allowed external domains
+        link_domain = urlparse(href).netloc
+        if link_domain != base_domain and not any(d in link_domain for d in extra_domains):
             continue
 
         # Optional URL pattern filter (include)
@@ -240,12 +243,53 @@ def _extract_links(html: str, base_url: str, url_pattern: str = "",
     return links
 
 
+async def _fetch_with_browser(url: str, wait_selector: str = "", wait_ms: int = 5000) -> str:
+    """Fetch a page using Playwright async headless browser (for SPAs).
+    Returns the fully rendered HTML after JavaScript execution.
+    """
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page(
+            user_agent=HEADERS["User-Agent"],
+            viewport={"width": 1280, "height": 800},
+        )
+        await page.goto(url, wait_until="networkidle", timeout=60000)
+        if wait_selector:
+            try:
+                await page.wait_for_selector(wait_selector, timeout=10000)
+            except Exception:
+                pass  # Continue even if selector not found
+        else:
+            await page.wait_for_timeout(wait_ms)
+        html = await page.content()
+        await browser.close()
+    return html
+
+
 class GuidelineScraper:
     """Web scraper for clinical guidelines with 3-tier support."""
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
+
+    async def fetch_with_browser(self, url: str, css_selector: str = "") -> dict:
+        """Fetch a page using headless browser for SPA sites. Returns {ok, text, html, error}."""
+        try:
+            # Handle PDF links (browser can't render PDFs, download instead)
+            if url.lower().endswith(".pdf"):
+                return self.fetch_public_source(url, css_selector)
+
+            html = await _fetch_with_browser(url)
+            text = _extract_text_from_html(html, css_selector)
+            if not text or len(text) < 50:
+                return {"ok": False, "text": "", "html": html, "error": "No se pudo extraer contenido significativo"}
+
+            return {"ok": True, "text": text, "html": html, "error": ""}
+        except Exception as e:
+            return {"ok": False, "text": "", "html": "", "error": f"Browser error: {e}"}
 
     def fetch_public_source(self, url: str, css_selector: str = "") -> dict:
         """Tier 1: Fetch and parse a public source. Returns {ok, text, error}."""
@@ -429,9 +473,10 @@ class GuidelineScraper:
         except Exception as e:
             return {"ok": False, "error": f"Error en login: {e}"}
 
-    def crawl(self, seed_url: str, max_depth: int = 1, url_pattern: str = "",
+    async def crawl(self, seed_url: str, max_depth: int = 1, url_pattern: str = "",
               url_exclude: str = "", css_selector: str = "",
-              max_pages: int = 200) -> list[dict]:
+              max_pages: int = 200, use_browser: bool = False,
+              allowed_domains: list[str] = None) -> list[dict]:
         """Crawl from seed URL following links up to max_depth levels.
         Returns list of {url, title, text} for pages with extractable content.
         depth=0 means seed page only (same as single fetch).
@@ -439,6 +484,7 @@ class GuidelineScraper:
         url_pattern: regex filter for links. Use '||' to specify per-depth patterns:
             'pattern0||pattern1||pattern2' applies pattern0 at depth 0, pattern1 at depth 1, etc.
             A single pattern (no '||') applies at all depths.
+        use_browser: if True, use Playwright headless browser for SPA sites.
         """
         visited = set()
         results = []
@@ -456,56 +502,80 @@ class GuidelineScraper:
                 return depth_patterns[depth].strip()
             return depth_patterns[-1].strip() if depth_patterns else ""
 
-        def _crawl(url, depth):
+        seed_domain = urlparse(seed_url).netloc
+
+        async def _fetch_page(url):
+            """Fetch page HTML, using browser or requests based on setting.
+            External domains (articles) always use requests (not browser).
+            """
+            if url.lower().endswith(".pdf"):
+                # Always use requests for PDFs
+                domain = urlparse(url).netloc
+                _rate_limit(domain)
+                resp = self.session.get(url, timeout=60)
+                resp.raise_for_status()
+                return {"html": None, "pdf_bytes": resp.content}
+
+            if use_browser:
+                html = await _fetch_with_browser(url, wait_ms=3000)
+                return {"html": html, "pdf_bytes": None}
+            else:
+                domain = urlparse(url).netloc
+                _rate_limit(domain)
+                resp = self.session.get(url, timeout=60)
+                resp.raise_for_status()
+                content_type = resp.headers.get("Content-Type", "")
+                if "application/pdf" in content_type:
+                    return {"html": None, "pdf_bytes": resp.content}
+                return {"html": resp.text, "pdf_bytes": None}
+
+        async def _crawl(url, depth):
             if url in visited or len(visited) >= max_pages:
                 return
             visited.add(url)
 
-            domain = urlparse(url).netloc
-            _rate_limit(domain)
-
             try:
-                resp = self.session.get(url, timeout=60)
-                resp.raise_for_status()
+                page_data = await _fetch_page(url)
             except Exception as e:
                 console.print(f"[red]Crawl error {url}: {e}[/red]")
                 return
 
-            content_type = resp.headers.get("Content-Type", "")
-
-            # Handle PDF downloads
-            if "application/pdf" in content_type or url.lower().endswith(".pdf"):
-                result = self._handle_pdf(resp.content, url)
+            # Handle PDF
+            if page_data["pdf_bytes"]:
+                result = self._handle_pdf(page_data["pdf_bytes"], url)
                 if result["ok"]:
                     title = url.split("/")[-1].replace(".pdf", "").replace("%20", " ")
                     results.append({"url": url, "title": title, "text": result["text"]})
                     console.print(f"  [green]PDF: {title} ({len(result['text'])} chars)[/green]")
                 return
 
-            html = resp.text
+            html = page_data["html"]
 
             # Follow links if we haven't reached max depth
             if depth < max_depth:
                 pattern_for_depth = _get_pattern(depth)
-                links = _extract_links(html, seed_url, pattern_for_depth, url_exclude)
+                links = _extract_links(html, seed_url, pattern_for_depth, url_exclude, allowed_domains)
                 # Prioritize PDF/document links over navigation links
                 links.sort(key=lambda l: (0 if l.lower().endswith('.pdf') else 1))
                 console.print(f"  [cyan]Nivel {depth}: {url[:80]} → {len(links)} links[/cyan]")
                 for link in links:
-                    _crawl(link, depth + 1)
+                    await _crawl(link, depth + 1)
 
-            # Extract content from this page (skip index/navigation pages)
+            # Extract content from leaf pages (max depth) or pages with substantial text
             text = _extract_text_from_html(html, css_selector)
-            if text and len(text) >= 100 and depth == max_depth:
+            is_leaf = depth == max_depth
+            has_substantial_content = len(text) >= 500 if text else False
+            if text and len(text) >= 100 and (is_leaf or has_substantial_content):
                 soup = BeautifulSoup(html, "lxml")
                 title_tag = soup.find("title")
                 title = title_tag.get_text(strip=True) if title_tag else url.split("/")[-1]
                 results.append({"url": url, "title": title, "text": text})
                 console.print(f"  [green]Contenido: {title[:60]} ({len(text)} chars)[/green]")
 
+        mode = "browser" if use_browser else "requests"
         pattern_desc = " → ".join(depth_patterns) if depth_patterns else (url_pattern or "sin filtro")
-        console.print(f"[bold cyan]Crawling {seed_url} (profundidad: {max_depth}, patron: {pattern_desc}, excluir: {url_exclude or 'nada'})[/bold cyan]")
-        _crawl(seed_url, 0)
+        console.print(f"[bold cyan]Crawling {seed_url} (profundidad: {max_depth}, modo: {mode}, patron: {pattern_desc}, excluir: {url_exclude or 'nada'})[/bold cyan]")
+        await _crawl(seed_url, 0)
         console.print(f"[bold green]Crawl completado: {len(results)} paginas con contenido, {len(visited)} visitadas[/bold green]")
         return results
 
@@ -529,7 +599,7 @@ class GuidelineScraper:
         console.print(f"[green]Indexed web source: {source_name} ({len(text)} chars)[/green]")
         return rag.get_total_count()
 
-    def fetch_and_index(self, source: dict, rag, expert_slug: str) -> dict:
+    async def fetch_and_index(self, source: dict, rag, expert_slug: str) -> dict:
         """Full flow: optional login + fetch/crawl + detect changes + index + update DB.
         source: dict from web_sources table.
         Returns {ok, message, new_version, content_changed, pages_found}.
@@ -540,6 +610,7 @@ class GuidelineScraper:
         url = source["url"]
         now = datetime.now().isoformat()
         crawl_depth = source.get("crawl_depth", 0) or 0
+        use_browser = bool(source.get("use_browser", 0))
 
         # ── Tier 2: Monitor only ──
         if source_type == "monitor":
@@ -589,12 +660,18 @@ class GuidelineScraper:
 
         # ── Multi-level crawl ──
         if crawl_depth > 0:
-            pages = self.crawl(
+            # Parse allowed_domains from comma-separated string
+            domains_str = source.get("allowed_domains", "")
+            extra_domains = [d.strip() for d in domains_str.split(",") if d.strip()] if domains_str else None
+
+            pages = await self.crawl(
                 url,
                 max_depth=crawl_depth,
                 url_pattern=source.get("url_pattern", ""),
                 url_exclude=source.get("url_exclude", ""),
                 css_selector=source.get("css_selector_content", ""),
+                use_browser=use_browser,
+                allowed_domains=extra_domains,
             )
 
             if not pages:
@@ -649,6 +726,8 @@ class GuidelineScraper:
             else:
                 # Already logged in via session, use regular fetch
                 result = self.fetch_public_source(url, source.get("css_selector_content", ""))
+        elif use_browser:
+            result = await self.fetch_with_browser(url, source.get("css_selector_content", ""))
         else:
             result = self.fetch_public_source(url, source.get("css_selector_content", ""))
 
