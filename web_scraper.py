@@ -246,26 +246,34 @@ def _extract_links(html: str, base_url: str, url_pattern: str = "",
 async def _fetch_with_browser(url: str, wait_selector: str = "", wait_ms: int = 5000) -> str:
     """Fetch a page using Playwright async headless browser (for SPAs).
     Returns the fully rendered HTML after JavaScript execution.
+    Uses domcontentloaded + fixed wait to avoid hanging on analytics-heavy pages.
+    Total timeout: 45 seconds.
     """
+    import asyncio as _asyncio
     from playwright.async_api import async_playwright
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(
-            user_agent=HEADERS["User-Agent"],
-            viewport={"width": 1280, "height": 800},
-        )
-        await page.goto(url, wait_until="networkidle", timeout=60000)
-        if wait_selector:
+    async def _do_fetch():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
             try:
-                await page.wait_for_selector(wait_selector, timeout=10000)
-            except Exception:
-                pass  # Continue even if selector not found
-        else:
-            await page.wait_for_timeout(wait_ms)
-        html = await page.content()
-        await browser.close()
-    return html
+                page = await browser.new_page(
+                    user_agent=HEADERS["User-Agent"],
+                    viewport={"width": 1280, "height": 800},
+                )
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                # Wait for JS to render content
+                await page.wait_for_timeout(wait_ms)
+                if wait_selector:
+                    try:
+                        await page.wait_for_selector(wait_selector, timeout=5000)
+                    except Exception:
+                        pass
+                html = await page.content()
+                return html
+            finally:
+                await browser.close()
+
+    return await _asyncio.wait_for(_do_fetch(), timeout=60)
 
 
 class GuidelineScraper:
@@ -517,7 +525,7 @@ class GuidelineScraper:
                 return {"html": None, "pdf_bytes": resp.content}
 
             if use_browser:
-                html = await _fetch_with_browser(url, wait_ms=3000)
+                html = await _fetch_with_browser(url, wait_ms=8000)
                 return {"html": html, "pdf_bytes": None}
             else:
                 domain = urlparse(url).netloc
