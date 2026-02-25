@@ -88,6 +88,39 @@
 
         .upload-zone:hover { border-color: #f59e0b; }
         .upload-zone input { display: none; }
+
+        /* Progress overlay */
+        .progress-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .progress-overlay.active { display: flex; }
+        .progress-box {
+            background: #111827;
+            border: 1px solid #2a3050;
+            border-radius: 12px;
+            padding: 32px 40px;
+            text-align: center;
+            min-width: 320px;
+            max-width: 480px;
+        }
+        .progress-spinner {
+            width: 40px; height: 40px;
+            border: 3px solid #1e2640;
+            border-top-color: #f59e0b;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .progress-title { color: #f59e0b; font-weight: 600; font-size: 1em; margin-bottom: 8px; }
+        .progress-status { color: #94a3b8; font-size: 0.82em; line-height: 1.5; }
+        .progress-elapsed { color: #475569; font-size: 0.72em; margin-top: 10px; }
 {% endblock %}
 
 {% block content %}
@@ -235,11 +268,48 @@
             </div>
         </div>
     </div>
+
+    <div class="progress-overlay" id="progressOverlay">
+        <div class="progress-box">
+            <div class="progress-spinner"></div>
+            <div class="progress-title" id="progressTitle">Procesando...</div>
+            <div class="progress-status" id="progressStatus">Iniciando descarga</div>
+            <div class="progress-elapsed" id="progressElapsed"></div>
+        </div>
+    </div>
 {% endblock %}
 
 {% block scripts %}
     <script>
         const EXPERT_ID = {{ expert.id }};
+
+        // ── Progress overlay helpers ──
+        let _progressStart = null;
+        let _progressTimer = null;
+
+        function showProgress(title, status) {
+            document.getElementById('progressTitle').textContent = title;
+            document.getElementById('progressStatus').textContent = status || '';
+            document.getElementById('progressElapsed').textContent = '';
+            document.getElementById('progressOverlay').classList.add('active');
+            _progressStart = Date.now();
+            _progressTimer = setInterval(() => {
+                const secs = Math.floor((Date.now() - _progressStart) / 1000);
+                const min = Math.floor(secs / 60);
+                const sec = secs % 60;
+                document.getElementById('progressElapsed').textContent =
+                    min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+            }, 1000);
+        }
+
+        function updateProgress(status) {
+            document.getElementById('progressStatus').textContent = status;
+        }
+
+        function hideProgress() {
+            document.getElementById('progressOverlay').classList.remove('active');
+            if (_progressTimer) { clearInterval(_progressTimer); _progressTimer = null; }
+        }
 
         async function uploadFiles(files) {
             for (const file of files) {
@@ -269,17 +339,29 @@
 
         async function reloadAll() {
             if (!confirm('Reindexar todas las guias? Esto puede tomar varios minutos.')) return;
-            showToast('Reindexando...');
-            const data = await apiCall(`/api/experts/${EXPERT_ID}/guidelines/reload`, 'POST');
-            if (data.ok) { showToast(`Listo: ${data.total_chunks} chunks`); location.reload(); }
-            else showToast(data.error, 'error');
+            showProgress('Reindexando', 'Recargando todas las guias...');
+            try {
+                const data = await apiCall(`/api/experts/${EXPERT_ID}/guidelines/reload`, 'POST');
+                hideProgress();
+                if (data.ok) { showToast(`Listo: ${data.total_chunks} chunks`); location.reload(); }
+                else showToast(data.error, 'error');
+            } catch (e) {
+                hideProgress();
+                showToast(`Error: ${e.message}`, 'error');
+            }
         }
 
         async function fetchSource(sourceId) {
-            showToast('Descargando...');
-            const data = await apiCall(`/api/web-sources/${sourceId}/fetch`, 'POST');
-            if (data.ok) { showToast('Descarga completada'); location.reload(); }
-            else showToast(data.error || 'Error', 'error');
+            showProgress('Descargando fuente', 'Crawling e indexando contenido...\nEsto puede tomar varios minutos.');
+            try {
+                const data = await apiCall(`/api/web-sources/${sourceId}/fetch`, 'POST');
+                hideProgress();
+                if (data.ok) { showToast('Descarga completada'); location.reload(); }
+                else showToast(data.error || 'Error', 'error');
+            } catch (e) {
+                hideProgress();
+                showToast(`Error: ${e.message}`, 'error');
+            }
         }
 
         async function addSource() {
@@ -304,10 +386,16 @@
             });
             if (!data.ok) { showToast(data.error || 'Error', 'error'); return; }
 
-            showToast('Fuente creada. Descargando...');
-            const fetchResult = await apiCall(`/api/web-sources/${data.id}/fetch`, 'POST');
-            if (fetchResult.ok) showToast('Descarga completada');
-            else showToast(fetchResult.error || 'Error al descargar', 'error');
+            showProgress('Descargando fuente', 'Fuente creada. Crawling e indexando...\nEsto puede tomar varios minutos.');
+            try {
+                const fetchResult = await apiCall(`/api/web-sources/${data.id}/fetch`, 'POST');
+                hideProgress();
+                if (fetchResult.ok) showToast('Descarga completada');
+                else showToast(fetchResult.error || 'Error al descargar', 'error');
+            } catch (e) {
+                hideProgress();
+                showToast(`Error: ${e.message}`, 'error');
+            }
             setTimeout(() => location.reload(), 1500);
         }
 
