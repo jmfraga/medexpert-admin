@@ -22,7 +22,9 @@ console = Console()
 
 # Rate limiting: track last request time per domain
 _domain_last_request: dict[str, float] = {}
+_domain_request_count: dict[str, int] = {}
 RATE_LIMIT_SECONDS = 2.0
+RATE_LIMIT_EXTERNAL_SECONDS = 5.0  # More conservative for external domains
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -484,7 +486,8 @@ class GuidelineScraper:
     async def crawl(self, seed_url: str, max_depth: int = 1, url_pattern: str = "",
               url_exclude: str = "", css_selector: str = "",
               max_pages: int = 200, use_browser: bool = False,
-              allowed_domains: list[str] = None) -> list[dict]:
+              allowed_domains: list[str] = None,
+              min_content_length: int = 2000) -> list[dict]:
         """Crawl from seed URL following links up to max_depth levels.
         Returns list of {url, title, text} for pages with extractable content.
         depth=0 means seed page only (same as single fetch).
@@ -525,6 +528,8 @@ class GuidelineScraper:
                 return {"html": None, "pdf_bytes": resp.content}
 
             if use_browser:
+                domain = urlparse(url).netloc
+                _rate_limit(domain)
                 html = await _fetch_with_browser(url, wait_ms=8000)
                 return {"html": html, "pdf_bytes": None}
             else:
@@ -569,11 +574,10 @@ class GuidelineScraper:
                 for link in links:
                     await _crawl(link, depth + 1)
 
-            # Extract content from leaf pages (max depth) or pages with substantial text
+            # Extract content from pages with enough text to be useful for RAG
+            # Skip listing/navigation pages with minimal content
             text = _extract_text_from_html(html, css_selector)
-            is_leaf = depth == max_depth
-            has_substantial_content = len(text) >= 500 if text else False
-            if text and len(text) >= 100 and (is_leaf or has_substantial_content):
+            if text and len(text) >= min_content_length:
                 soup = BeautifulSoup(html, "lxml")
                 title_tag = soup.find("title")
                 title = title_tag.get_text(strip=True) if title_tag else url.split("/")[-1]
@@ -672,6 +676,8 @@ class GuidelineScraper:
             domains_str = source.get("allowed_domains", "")
             extra_domains = [d.strip() for d in domains_str.split(",") if d.strip()] if domains_str else None
 
+            min_len = source.get("min_content_length", 2000) or 2000
+
             pages = await self.crawl(
                 url,
                 max_depth=crawl_depth,
@@ -680,6 +686,7 @@ class GuidelineScraper:
                 css_selector=source.get("css_selector_content", ""),
                 use_browser=use_browser,
                 allowed_domains=extra_domains,
+                min_content_length=min_len,
             )
 
             if not pages:

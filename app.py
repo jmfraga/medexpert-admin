@@ -229,6 +229,7 @@ async def create_web_source(request: Request):
             url_exclude=data.get("url_exclude", ""),
             use_browser=1 if data.get("use_browser") else 0,
             allowed_domains=data.get("allowed_domains", ""),
+            min_content_length=int(data.get("min_content_length", 2000)),
         )
         return JSONResponse({"ok": True, "id": source_id})
     except Exception as e:

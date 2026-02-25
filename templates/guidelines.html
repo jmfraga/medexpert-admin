@@ -161,7 +161,7 @@
                         <input type="text" id="srcUrl" placeholder="https://www.esmo.org/guidelines/..." style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
                     </div>
                 </div>
-                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin-bottom:10px;">
                     <div>
                         <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Tipo</label>
                         <select id="srcType" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
@@ -178,6 +178,10 @@
                         <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Profundidad crawl</label>
                         <input type="number" id="srcDepth" value="0" min="0" max="5" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
                     </div>
+                    <div>
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Min chars contenido</label>
+                        <input type="number" id="srcMinContent" value="2000" min="100" max="50000" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                    </div>
                 </div>
                 <div style="margin-bottom:10px;">
                     <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Selector CSS (contenido)</label>
@@ -185,8 +189,8 @@
                 </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
                     <div>
-                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Patron URL (regex para links)</label>
-                        <input type="text" id="srcPattern" placeholder="guidelines.*breast" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                        <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Patron URL (regex, usar || para patron por nivel)</label>
+                        <input type="text" id="srcPattern" placeholder="patron-nivel0||patron-nivel1||patron-nivel2" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
                     </div>
                     <div>
                         <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Excluir URL (regex)</label>
@@ -296,6 +300,7 @@
                 url_exclude: document.getElementById('srcExclude').value.trim(),
                 use_browser: document.getElementById('srcBrowser').checked,
                 allowed_domains: document.getElementById('srcDomains').value.trim(),
+                min_content_length: parseInt(document.getElementById('srcMinContent').value) || 2000,
             });
             if (!data.ok) { showToast(data.error || 'Error', 'error'); return; }
 

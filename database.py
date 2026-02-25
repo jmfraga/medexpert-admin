@@ -92,6 +92,7 @@ def init_db():
             url_exclude TEXT DEFAULT '',
             use_browser INTEGER DEFAULT 0,
             allowed_domains TEXT DEFAULT '',
+            min_content_length INTEGER DEFAULT 2000,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (expert_id) REFERENCES experts(id) ON DELETE CASCADE,
             UNIQUE(expert_id, url)
@@ -129,6 +130,7 @@ def init_db():
     for col, defn in [
         ("use_browser", "INTEGER DEFAULT 0"),
         ("allowed_domains", "TEXT DEFAULT ''"),
+        ("min_content_length", "INTEGER DEFAULT 2000"),
     ]:
         try:
             conn.execute(f"ALTER TABLE web_sources ADD COLUMN {col} {defn}")
@@ -340,7 +342,8 @@ def create_web_source(expert_id: int, name: str, url: str, source_type: str = "p
                       login_url: str = "", login_username: str = "",
                       login_password: str = "", url_exclude: str = "",
                       use_browser: int = 0,
-                      allowed_domains: str = "") -> int:
+                      allowed_domains: str = "",
+                      min_content_length: int = 2000) -> int:
     conn = get_connection()
     try:
         cursor = conn.execute("""
@@ -348,12 +351,13 @@ def create_web_source(expert_id: int, name: str, url: str, source_type: str = "p
                                      css_selector_content, css_selector_version,
                                      version_regex, notes, crawl_depth, url_pattern,
                                      login_url, login_username, login_password,
-                                     url_exclude, use_browser, allowed_domains)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     url_exclude, use_browser, allowed_domains,
+                                     min_content_length)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (expert_id, name, url, source_type, category,
               css_selector_content, css_selector_version, version_regex, notes,
               crawl_depth, url_pattern, login_url, login_username, login_password,
-              url_exclude, use_browser, allowed_domains))
+              url_exclude, use_browser, allowed_domains, min_content_length))
         conn.commit()
         return cursor.lastrowid
     finally:
