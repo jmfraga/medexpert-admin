@@ -10,13 +10,23 @@ Part of the [MedExpert](https://github.com/jmfraga/MedExpert) ecosystem, split i
 
 - **Expert management** — Create and configure medical specialties with custom system prompts and icons
 - **Guidelines management** — Upload PDFs/text, index into ChromaDB (RAG), manage per expert
-- **Web scraping** — 3-tier scraper (public, monitor, authenticated) with multi-level crawler
-  - NCCN auto-login and guideline crawling
-  - PDF priority downloading
-  - URL pattern matching with depth control
-- **Client management** — Register client devices, assign experts, manage plans
-- **License generation** — Create license.json and config.json for client devices
-- **Distribution** — Push ChromaDB, config, and licenses to clients via rsync/scp over Tailscale
+- **Medical glossary** — Per-specialty term management for Whisper transcription improvement
+  - CRUD + bulk import (one term per line, pipe-separated categories)
+  - Pushed to clients as `glossary.json` alongside ChromaDB
+  - Transcription corrections from doctors can be applied directly to glossary
+- **Ticket system** — Receive and manage feedback from client devices
+  - Transcription corrections, bug reports, and feature requests
+  - Filter by status (open/in progress/resolved) and type
+  - One-click "Apply to glossary" for transcription corrections
+- **Web scraping** — 3-tier scraper (public, monitor, authenticated) with Playwright browser support
+  - Per-depth URL patterns, domain filtering, CSS content selectors
+  - Authenticated crawling (Elsevier OAuth2 + CAPTCHA for ESMO guidelines)
+- **Client management** — Register devices, assign experts, per-client configuration
+  - Remote Whisper model selection (tiny/small/medium/large-v3 per device)
+  - Configurable silence threshold, consultation intervals, context window
+- **License generation** — Create license.json and config.json with API key injection
+- **Distribution** — Push ChromaDB, config, glossary, and licenses via rsync/scp over Tailscale
+  - KB versioning with SHA256 manifests, keeps latest 3 versions
 - **LLM configuration** — Set default provider and model for client licenses
 - **Dashboard** — Overview of experts, clients, guidelines, and distribution status
 
@@ -38,26 +48,28 @@ cp .env.example .env    # Add your API keys
 python app.py
 ```
 
-Open http://localhost:8080
+Open http://localhost:8081
 
 ## Structure
 
 ```
 medexpert-admin/
 ├── app.py                 # FastAPI main app (dashboard, experts, clients, config)
-├── database.py            # SQLite: experts, clients, web_sources, settings
+├── database.py            # SQLite: experts, clients, web_sources, glossary, tickets, settings
 ├── rag_engine.py          # RAG engine (read/write) with ChromaDB
 ├── license_server.py      # License & config generation for clients
-├── distributor.py         # Push ChromaDB/config/license via rsync/scp
-├── web_scraper.py         # 3-tier web scraper + multi-level crawler
+├── distributor.py         # Push ChromaDB/config/glossary/license via rsync/scp
+├── web_scraper.py         # 3-tier web scraper + Playwright browser support
 ├── load_guidelines.py     # Load PDF/TXT guidelines into ChromaDB
 ├── utils.py               # Shared utilities
 ├── templates/
-│   ├── base.html          # Admin theme (amber accent)
+│   ├── base.html          # Admin theme (amber accent, sidebar nav)
 │   ├── dashboard.html     # Overview with expert/client cards
 │   ├── experts.html       # Expert CRUD
 │   ├── guidelines.html    # Per-expert guidelines + web sources
-│   ├── clients.html       # Client management + distribution
+│   ├── glossary.html      # Per-expert medical glossary management
+│   ├── clients.html       # Client management + per-client config + distribution
+│   ├── tickets.html       # Ticket management (corrections, bugs, features)
 │   └── config.html        # API keys, LLM model config, system info
 └── data/
     ├── medexpert_admin.db # SQLite database
@@ -74,7 +86,7 @@ Environment variables (`.env`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `ADMIN_PORT` | `8080` | Web server port |
+| `ADMIN_PORT` | `8081` | Web server port |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key (injected into client licenses) |
 | `OPENAI_API_KEY` | — | OpenAI API key (injected into client licenses) |
 
@@ -95,8 +107,12 @@ Admin (Mac/Server)                    Client (Raspberry Pi)
 │ (read/write)│    (Tailscale)       │ (read-only) │
 │             │                      │             │
 │ config.json │──── scp ────────────>│ config.json │
+│ glossary.json──── scp ────────────>│ glossary.json
 │ license.json│──── scp ────────────>│ license.json│
 └─────────────┘                      └─────────────┘
+        ▲                                    │
+        │         tickets (HTTP POST)        │
+        └────────────────────────────────────┘
 ```
 
 ## Disclaimer
