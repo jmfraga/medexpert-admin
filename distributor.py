@@ -373,6 +373,52 @@ def push_license_to_client(client_id: int) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def push_glossary_to_client(client_id: int, expert_slug: str) -> dict:
+    """Push an expert's glossary terms as glossary.json to a client device."""
+    client = db.get_client_by_id(client_id)
+    if not client:
+        return {"ok": False, "error": "Client not found"}
+
+    if not client.get("tailscale_ip"):
+        return {"ok": False, "error": "No Tailscale IP configured"}
+
+    expert = db.get_expert_by_slug(expert_slug)
+    if not expert:
+        return {"ok": False, "error": f"Expert {expert_slug} not found"}
+
+    terms = db.get_glossary_terms_for_expert(expert["id"])
+    glossary_data = {
+        "specialty": expert_slug,
+        "version": datetime.now().strftime("%Y%m%d"),
+        "terms": [t["term"] for t in terms],
+    }
+
+    # Save locally
+    local_dir = Path(f"data/clients/{client['hostname']}")
+    local_dir.mkdir(parents=True, exist_ok=True)
+    local_file = local_dir / "glossary.json"
+    with open(local_file, "w", encoding="utf-8") as f:
+        json.dump(glossary_data, f, ensure_ascii=False, indent=2)
+
+    target = f"{client['tailscale_ip']}:~/medexpert-client/data/glossary.json"
+
+    try:
+        result = subprocess.run(
+            ["scp", str(local_file), target],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        if result.returncode == 0:
+            db.log_distribution(client_id, expert_slug, "glossary_push", "success")
+            console.print(f"[green]Glossary pushed to {client['hostname']}: {len(terms)} terms[/green]")
+            return {"ok": True, "terms": len(terms)}
+        else:
+            return {"ok": False, "error": result.stderr}
+
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def push_all_to_client(client_id: int) -> dict:
     """Push everything (license, config, ChromaDB for all assigned experts) to a client."""
     results = {"license": None, "config": None, "experts": {}}
@@ -383,6 +429,7 @@ def push_all_to_client(client_id: int) -> dict:
     client_experts = db.get_client_experts(client_id)
     for expert in client_experts:
         results["experts"][expert["slug"]] = push_chromadb_to_client(client_id, expert["slug"])
+        results["experts"][f"{expert['slug']}_glossary"] = push_glossary_to_client(client_id, expert["slug"])
 
     return results
 

@@ -48,6 +48,7 @@
                 </div>
                 <div class="expert-actions">
                     <a href="/experts/{{ e.id }}/guidelines" class="btn" style="text-decoration:none;">Guias</a>
+                    <a href="/experts/{{ e.id }}/glossary" class="btn" style="text-decoration:none;">Glosario</a>
                     <button class="btn" onclick="editExpert({{ e.id }}, '{{ e.name }}', `{{ e.system_prompt|e }}`)">Editar</button>
                     <button class="btn danger" onclick="deleteExpert({{ e.id }}, '{{ e.name }}')">Eliminar</button>
                 </div>

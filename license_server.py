@@ -87,11 +87,12 @@ def generate_config(client_id: int) -> dict:
 
     # Defaults
     defaults = {
-        "whisper_model": "small",
+        "whisper_model": "medium",
         "whisper_language": "es",
         "web_port": 8081,
         "tts_enabled": False,
-        "silence_threshold": 3.0,
+        "silence_threshold": 1.5,
+        "energy_threshold": 0.005,
         "max_context_minutes": 30,
         "min_consult_interval": 15,
         "segments_trigger": 3,

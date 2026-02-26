@@ -276,6 +276,81 @@ async def delete_web_source(source_id: int):
 
 
 # ─────────────────────────────────────────────
+# Glossary
+# ─────────────────────────────────────────────
+
+@app.get("/experts/{expert_id}/glossary", response_class=HTMLResponse)
+async def glossary_page(request: Request, expert_id: int):
+    expert = db.get_expert_by_id(expert_id)
+    if not expert:
+        return RedirectResponse("/experts")
+    terms = db.get_glossary_terms_for_expert(expert_id)
+    categories = {}
+    for t in terms:
+        cat = t["category"] or "General"
+        categories.setdefault(cat, []).append(t)
+    return templates.TemplateResponse("glossary.html", {
+        "request": request,
+        "expert": expert,
+        "terms": terms,
+        "categories": categories,
+        "total_terms": len(terms),
+        "active_page": "experts",
+    })
+
+
+@app.post("/api/glossary")
+async def create_glossary_term(request: Request):
+    data = await request.json()
+    expert_id = data.get("expert_id")
+    term = data.get("term", "").strip()
+    category = data.get("category", "").strip()
+    if not expert_id or not term:
+        return JSONResponse({"ok": False, "error": "expert_id and term required"})
+    term_id = db.create_glossary_term(expert_id, term, category)
+    return JSONResponse({"ok": True, "id": term_id})
+
+
+@app.put("/api/glossary/{term_id}")
+async def update_glossary_term_route(term_id: int, request: Request):
+    data = await request.json()
+    db.update_glossary_term(term_id, term=data.get("term"), category=data.get("category"))
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/glossary/{term_id}")
+async def delete_glossary_term_route(term_id: int):
+    deleted = db.delete_glossary_term(term_id)
+    return JSONResponse({"ok": deleted})
+
+
+@app.post("/api/experts/{expert_id}/glossary/import")
+async def import_glossary(expert_id: int, request: Request):
+    data = await request.json()
+    terms = data.get("terms", [])
+    if not terms:
+        return JSONResponse({"ok": False, "error": "No terms provided"})
+    count = db.bulk_create_glossary_terms(expert_id, terms)
+    return JSONResponse({"ok": True, "imported": count})
+
+
+@app.get("/api/experts/{expert_id}/glossary/export")
+async def export_glossary(expert_id: int):
+    terms = db.get_glossary_terms_for_expert(expert_id)
+    expert = db.get_expert_by_id(expert_id)
+    terms_by_category = {}
+    for t in terms:
+        cat = t["category"] or "General"
+        terms_by_category.setdefault(cat, []).append(t["term"])
+    return JSONResponse({
+        "specialty": expert["slug"] if expert else "",
+        "version": datetime.now().strftime("%Y%m%d"),
+        "terms": [t["term"] for t in terms],
+        "terms_by_category": terms_by_category,
+    })
+
+
+# ─────────────────────────────────────────────
 # Clients
 # ─────────────────────────────────────────────
 
@@ -350,6 +425,106 @@ async def assign_expert(client_id: int, request: Request):
 async def unassign_expert(client_id: int, expert_id: int):
     db.remove_expert_from_client(client_id, expert_id)
     return JSONResponse({"ok": True})
+
+
+# ─────────────────────────────────────────────
+# Tickets (from clients)
+# ─────────────────────────────────────────────
+
+@app.post("/api/tickets")
+async def receive_ticket(request: Request):
+    data = await request.json()
+    ticket_type = data.get("ticket_type", "").strip()
+    title = data.get("title", "").strip()
+    if not ticket_type or not title:
+        return JSONResponse({"ok": False, "error": "ticket_type and title required"})
+    if ticket_type not in ("transcription", "bug", "feature"):
+        return JSONResponse({"ok": False, "error": "Invalid ticket_type"})
+
+    # Try to find client by hostname
+    client_id = None
+    hostname = data.get("hostname", "")
+    if hostname:
+        client = db.get_client_by_hostname(hostname)
+        if client:
+            client_id = client["id"]
+
+    ticket_id = db.create_ticket(
+        client_id=client_id,
+        ticket_type=ticket_type,
+        title=title,
+        description=data.get("description", ""),
+        expert_slug=data.get("expert_slug", ""),
+        original_text=data.get("original_text", ""),
+        suggested_text=data.get("suggested_text", ""),
+    )
+    return JSONResponse({"ok": True, "id": ticket_id})
+
+
+@app.get("/tickets", response_class=HTMLResponse)
+async def tickets_page(request: Request):
+    status_filter = request.query_params.get("status")
+    type_filter = request.query_params.get("type")
+    tickets = db.get_all_tickets(status=status_filter, ticket_type=type_filter)
+    stats = db.get_ticket_stats()
+    # Enrich with client name
+    for t in tickets:
+        if t.get("client_id"):
+            client = db.get_client_by_id(t["client_id"])
+            t["client_name"] = client["name"] if client else "Desconocido"
+        else:
+            t["client_name"] = "Desconocido"
+    return templates.TemplateResponse("tickets.html", {
+        "request": request,
+        "tickets": tickets,
+        "stats": stats,
+        "active_page": "tickets",
+        "current_status": status_filter or "",
+        "current_type": type_filter or "",
+    })
+
+
+@app.put("/api/tickets/{ticket_id}")
+async def update_ticket_route(ticket_id: int, request: Request):
+    data = await request.json()
+    updates = {}
+    if "status" in data:
+        updates["status"] = data["status"]
+        if data["status"] == "resolved":
+            updates["resolved_at"] = datetime.now().isoformat()
+    if "admin_notes" in data:
+        updates["admin_notes"] = data["admin_notes"]
+    db.update_ticket(ticket_id, **updates)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/tickets/{ticket_id}/apply-to-glossary")
+async def apply_ticket_to_glossary(ticket_id: int):
+    ticket = db.get_ticket_by_id(ticket_id)
+    if not ticket:
+        return JSONResponse({"ok": False, "error": "Ticket not found"})
+    if ticket["ticket_type"] != "transcription":
+        return JSONResponse({"ok": False, "error": "Not a transcription ticket"})
+    if not ticket["suggested_text"]:
+        return JSONResponse({"ok": False, "error": "No suggested text"})
+
+    # Find expert
+    expert = db.get_expert_by_slug(ticket["expert_slug"]) if ticket["expert_slug"] else None
+    if not expert:
+        # Try first expert as fallback
+        experts = db.get_all_experts()
+        expert = experts[0] if experts else None
+    if not expert:
+        return JSONResponse({"ok": False, "error": "No expert found"})
+
+    # Add suggested text as glossary term
+    term_id = db.create_glossary_term(expert["id"], ticket["suggested_text"].strip())
+
+    # Mark ticket as resolved
+    db.update_ticket(ticket_id, status="resolved", resolved_at=datetime.now().isoformat(),
+                     admin_notes=(ticket.get("admin_notes", "") + "\nTermino agregado al glosario.").strip())
+
+    return JSONResponse({"ok": True, "term_id": term_id})
 
 
 # ─────────────────────────────────────────────

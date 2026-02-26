@@ -123,6 +123,32 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS glossary_terms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            expert_id INTEGER NOT NULL,
+            term TEXT NOT NULL,
+            category TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (expert_id) REFERENCES experts(id) ON DELETE CASCADE,
+            UNIQUE(expert_id, term)
+        );
+
+        CREATE TABLE IF NOT EXISTS tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            expert_slug TEXT DEFAULT '',
+            ticket_type TEXT NOT NULL CHECK(ticket_type IN ('transcription', 'bug', 'feature')),
+            status TEXT DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'resolved', 'rejected')),
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            original_text TEXT DEFAULT '',
+            suggested_text TEXT DEFAULT '',
+            admin_notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            resolved_at TEXT,
+            FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
+        );
     """)
     conn.commit()
 
@@ -517,6 +543,167 @@ def get_distribution_log(client_id: int = None, limit: int = 50) -> list[dict]:
         """, (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────
+# Glossary Terms
+# ─────────────────────────────────────────────
+
+def create_glossary_term(expert_id: int, term: str, category: str = "") -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO glossary_terms (expert_id, term, category) VALUES (?, ?, ?)",
+            (expert_id, term, category),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_glossary_terms_for_expert(expert_id: int) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM glossary_terms WHERE expert_id = ? ORDER BY category, term",
+        (expert_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_glossary_term(term_id: int, **kwargs):
+    conn = get_connection()
+    allowed = {"term", "category"}
+    updates, params = [], []
+    for key, val in kwargs.items():
+        if key in allowed and val is not None:
+            updates.append(f"{key} = ?"); params.append(val)
+    if updates:
+        params.append(term_id)
+        conn.execute(f"UPDATE glossary_terms SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+    conn.close()
+
+
+def delete_glossary_term(term_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.execute("DELETE FROM glossary_terms WHERE id = ?", (term_id,))
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+
+def bulk_create_glossary_terms(expert_id: int, terms: list[dict]) -> int:
+    conn = get_connection()
+    try:
+        count = 0
+        for t in terms:
+            term = t.get("term", "").strip()
+            if not term:
+                continue
+            category = t.get("category", "").strip()
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO glossary_terms (expert_id, term, category) VALUES (?, ?, ?)",
+                (expert_id, term, category),
+            )
+            count += cursor.rowcount
+        conn.commit()
+        return count
+    finally:
+        conn.close()
+
+
+def get_glossary_term_count(expert_id: int) -> int:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM glossary_terms WHERE expert_id = ?",
+        (expert_id,)
+    ).fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+# ─────────────────────────────────────────────
+# Tickets
+# ─────────────────────────────────────────────
+
+def create_ticket(client_id: int, ticket_type: str, title: str,
+                  description: str = "", expert_slug: str = "",
+                  original_text: str = "", suggested_text: str = "") -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            INSERT INTO tickets (client_id, ticket_type, title, description,
+                                 expert_slug, original_text, suggested_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (client_id, ticket_type, title, description,
+              expert_slug, original_text, suggested_text))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_all_tickets(status: str = None, ticket_type: str = None) -> list[dict]:
+    conn = get_connection()
+    query = "SELECT * FROM tickets"
+    conditions, params = [], []
+    if status:
+        conditions.append("status = ?"); params.append(status)
+    if ticket_type:
+        conditions.append("ticket_type = ?"); params.append(ticket_type)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY created_at DESC"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_ticket_by_id(ticket_id: int) -> dict | None:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_ticket(ticket_id: int, **kwargs):
+    conn = get_connection()
+    allowed = {"status", "admin_notes", "resolved_at"}
+    updates, params = [], []
+    for key, val in kwargs.items():
+        if key in allowed and val is not None:
+            updates.append(f"{key} = ?"); params.append(val)
+    if updates:
+        params.append(ticket_id)
+        conn.execute(f"UPDATE tickets SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+    conn.close()
+
+
+def get_ticket_stats() -> dict:
+    conn = get_connection()
+    total = conn.execute("SELECT COUNT(*) as cnt FROM tickets").fetchone()["cnt"]
+    open_count = conn.execute("SELECT COUNT(*) as cnt FROM tickets WHERE status = 'open'").fetchone()["cnt"]
+    in_progress = conn.execute("SELECT COUNT(*) as cnt FROM tickets WHERE status = 'in_progress'").fetchone()["cnt"]
+    resolved = conn.execute("SELECT COUNT(*) as cnt FROM tickets WHERE status = 'resolved'").fetchone()["cnt"]
+    transcription = conn.execute("SELECT COUNT(*) as cnt FROM tickets WHERE ticket_type = 'transcription'").fetchone()["cnt"]
+    bug = conn.execute("SELECT COUNT(*) as cnt FROM tickets WHERE ticket_type = 'bug'").fetchone()["cnt"]
+    feature = conn.execute("SELECT COUNT(*) as cnt FROM tickets WHERE ticket_type = 'feature'").fetchone()["cnt"]
+    conn.close()
+    return {
+        "total": total,
+        "open": open_count,
+        "in_progress": in_progress,
+        "resolved": resolved,
+        "by_type": {
+            "transcription": transcription,
+            "bug": bug,
+            "feature": feature,
+        },
+    }
 
 
 # ─────────────────────────────────────────────

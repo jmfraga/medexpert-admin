@@ -1,0 +1,279 @@
+{% extends "base.html" %}
+
+{% block title %}MedExpert Admin - Glosario {{ expert.name }}{% endblock %}
+
+{% block extra_styles %}
+        .page-content { padding: 24px; max-width: 1100px; margin: 0 auto; }
+
+        .page-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px; flex-wrap: wrap; gap: 10px;
+        }
+
+        .page-header h1 { font-size: 1.2em; color: #f59e0b; }
+        .page-header .back-link { color: #64748b; text-decoration: none; font-size: 0.85em; }
+        .page-header .back-link:hover { color: #f59e0b; }
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: #111827;
+            border: 1px solid #1e2640;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .stat-card-value { font-size: 1.5em; font-weight: 700; color: #f59e0b; }
+        .stat-card-label { font-size: 0.75em; color: #64748b; }
+
+        .section { margin-bottom: 24px; }
+        .section-title {
+            font-size: 0.9em; color: #94a3b8; font-weight: 600;
+            margin-bottom: 10px; padding-bottom: 6px;
+            border-bottom: 1px solid #1e2640;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+
+        .term-list { display: flex; flex-direction: column; gap: 4px; }
+
+        .term-row {
+            background: #111827;
+            border: 1px solid #1e2640;
+            border-radius: 8px;
+            padding: 8px 16px;
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 12px;
+            align-items: center;
+            font-size: 0.88em;
+        }
+
+        .term-name { color: #e0e6ed; font-weight: 500; }
+        .term-category { color: #64748b; font-size: 0.82em; }
+
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.72em; font-weight: 600; }
+        .badge.green { background: #14532d; color: #4ade80; }
+        .badge.blue { background: #1e3a5f; color: #60a5fa; }
+        .badge.amber { background: #92400e; color: #fbbf24; }
+
+        .category-header {
+            font-size: 0.82em;
+            color: #f59e0b;
+            font-weight: 600;
+            margin-top: 12px;
+            margin-bottom: 6px;
+            padding: 4px 0;
+        }
+
+        .category-header:first-child { margin-top: 0; }
+
+        .import-zone {
+            border: 2px dashed #2a3050;
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+            color: #64748b;
+            font-size: 0.85em;
+            transition: border-color 0.2s;
+            cursor: pointer;
+        }
+
+        .import-zone:hover { border-color: #f59e0b; }
+
+        .bulk-input {
+            width: 100%;
+            background: #1a2040;
+            border: 1px solid #2a3050;
+            border-radius: 6px;
+            color: #e0e6ed;
+            padding: 10px 12px;
+            font-size: 0.85em;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .bulk-input:focus { outline: none; border-color: #f59e0b; }
+{% endblock %}
+
+{% block content %}
+    <div class="page-content">
+        <div class="page-header">
+            <div>
+                <a href="/experts" class="back-link">&larr; Expertos</a>
+                <h1>{{ expert.name }} - Glosario medico</h1>
+            </div>
+            <div style="display:flex; gap:8px;">
+                <button class="btn" onclick="toggleBulkAdd()">+ Agregar varios</button>
+                <button class="btn primary" onclick="openAddModal()">+ Agregar termino</button>
+            </div>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-card-value">{{ total_terms }}</div>
+                <div class="stat-card-label">Terminos</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-value">{{ categories|length }}</div>
+                <div class="stat-card-label">Categorias</div>
+            </div>
+        </div>
+
+        <div id="bulkAddSection" style="display:none; margin-bottom:20px;">
+            <div style="background:#111827; border:1px solid #1e2640; border-radius:8px; padding:16px;">
+                <div style="font-size:0.85em; color:#94a3b8; margin-bottom:8px;">
+                    Un termino por linea. Formato: <code style="color:#f59e0b;">termino</code> o <code style="color:#f59e0b;">termino | categoria</code>
+                </div>
+                <textarea class="bulk-input" id="bulkTerms" rows="6" placeholder="cisplatino | farmaco&#10;carboplatino | farmaco&#10;adenocarcinoma | diagnostico&#10;mastectomia | procedimiento"></textarea>
+                <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+                    <button class="btn" onclick="toggleBulkAdd()">Cancelar</button>
+                    <button class="btn primary" onclick="importBulk()">Importar</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">
+                Terminos por categoria
+            </div>
+            {% for cat, cat_terms in categories.items() %}
+            <div class="category-header">{{ cat }} ({{ cat_terms|length }})</div>
+            <div class="term-list">
+                {% for t in cat_terms %}
+                <div class="term-row">
+                    <div class="term-name">{{ t.term }}</div>
+                    <span class="badge blue">{{ t.category or 'General' }}</span>
+                    <div style="display:flex; gap:4px;">
+                        <button class="btn" onclick="editTerm({{ t.id }}, '{{ t.term|e }}', '{{ t.category|e }}')">Editar</button>
+                        <button class="btn danger" onclick="deleteTerm({{ t.id }}, '{{ t.term|e }}')">X</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+            {% if not terms %}
+            <div style="color:#475569; padding:24px; text-align:center;">
+                Sin terminos en el glosario. Agrega terminos medicos para mejorar la transcripcion de voz.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="termModal">
+        <div class="modal">
+            <h3 id="modalTitle">Agregar termino</h3>
+            <input type="hidden" id="editTermId">
+            <div class="form-group">
+                <label>Termino</label>
+                <input type="text" id="termInput" placeholder="cisplatino">
+            </div>
+            <div class="form-group">
+                <label>Categoria</label>
+                <input type="text" id="categoryInput" placeholder="farmaco, diagnostico, procedimiento, marcador...">
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeModal()">Cancelar</button>
+                <button class="btn primary" onclick="saveTerm()">Guardar</button>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        const EXPERT_ID = {{ expert.id }};
+
+        function openAddModal() {
+            document.getElementById('modalTitle').textContent = 'Agregar termino';
+            document.getElementById('editTermId').value = '';
+            document.getElementById('termInput').value = '';
+            document.getElementById('categoryInput').value = '';
+            document.getElementById('termModal').classList.add('show');
+            document.getElementById('termInput').focus();
+        }
+
+        function editTerm(id, term, category) {
+            document.getElementById('modalTitle').textContent = 'Editar termino';
+            document.getElementById('editTermId').value = id;
+            document.getElementById('termInput').value = term;
+            document.getElementById('categoryInput').value = category;
+            document.getElementById('termModal').classList.add('show');
+            document.getElementById('termInput').focus();
+        }
+
+        function closeModal() {
+            document.getElementById('termModal').classList.remove('show');
+        }
+
+        async function saveTerm() {
+            const term = document.getElementById('termInput').value.trim();
+            const category = document.getElementById('categoryInput').value.trim();
+            const editId = document.getElementById('editTermId').value;
+
+            if (!term) { showToast('Termino requerido', 'error'); return; }
+
+            let data;
+            if (editId) {
+                data = await apiCall(`/api/glossary/${editId}`, 'PUT', { term, category });
+            } else {
+                data = await apiCall('/api/glossary', 'POST', { expert_id: EXPERT_ID, term, category });
+            }
+
+            if (data.ok) {
+                showToast(editId ? 'Termino actualizado' : 'Termino agregado');
+                closeModal();
+                location.reload();
+            } else {
+                showToast(data.error || 'Error', 'error');
+            }
+        }
+
+        async function deleteTerm(id, term) {
+            if (!confirm(`Eliminar "${term}"?`)) return;
+            const data = await apiCall(`/api/glossary/${id}`, 'DELETE');
+            if (data.ok) { showToast('Eliminado'); location.reload(); }
+            else showToast('Error al eliminar', 'error');
+        }
+
+        function toggleBulkAdd() {
+            const section = document.getElementById('bulkAddSection');
+            section.style.display = section.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function importBulk() {
+            const text = document.getElementById('bulkTerms').value.trim();
+            if (!text) { showToast('Ingresa terminos', 'error'); return; }
+
+            const lines = text.split('\n').filter(l => l.trim());
+            const terms = lines.map(line => {
+                const parts = line.split('|').map(p => p.trim());
+                return { term: parts[0], category: parts[1] || '' };
+            }).filter(t => t.term);
+
+            if (!terms.length) { showToast('No se encontraron terminos validos', 'error'); return; }
+
+            const data = await apiCall(`/api/experts/${EXPERT_ID}/glossary/import`, 'POST', { terms });
+            if (data.ok) {
+                showToast(`${data.imported} terminos importados`);
+                location.reload();
+            } else {
+                showToast(data.error || 'Error', 'error');
+            }
+        }
+
+        // Enter key to save in modal
+        document.getElementById('termInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') saveTerm();
+        });
+        document.getElementById('categoryInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') saveTerm();
+        });
+    </script>
+{% endblock %}
