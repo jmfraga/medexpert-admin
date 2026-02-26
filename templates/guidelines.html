@@ -234,15 +234,32 @@
                     <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Dominios externos permitidos (separados por coma)</label>
                     <input type="text" id="srcDomains" placeholder="annalsofoncology.org, thelancet.com" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
                 </div>
-                <div style="display:flex; gap:8px; justify-content:space-between; align-items:center;">
+                <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
                     <label style="font-size:0.82em; color:#94a3b8; display:flex; align-items:center; gap:6px; cursor:pointer;">
                         <input type="checkbox" id="srcBrowser" style="accent-color:#f59e0b;">
                         Usar browser (sitios SPA/JavaScript)
                     </label>
-                    <div style="display:flex; gap:8px;">
-                        <button class="btn" onclick="document.getElementById('addSourceForm').style.display='none'">Cancelar</button>
-                        <button class="btn primary" onclick="addSource()">Guardar y descargar</button>
+                </div>
+                <div id="loginFields" style="display:none; background:#0d1117; border:1px solid #2a3050; border-radius:6px; padding:12px; margin-bottom:10px;">
+                    <div style="font-size:0.78em; color:#f59e0b; font-weight:600; margin-bottom:8px;">Credenciales de acceso</div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;">
+                        <div>
+                            <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">URL de login</label>
+                            <input type="text" id="srcLoginUrl" placeholder="https://site.com/login" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Usuario / Email</label>
+                            <input type="text" id="srcLoginUser" placeholder="usuario@correo.com" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78em; color:#64748b; display:block; margin-bottom:4px;">Contraseña</label>
+                            <input type="password" id="srcLoginPass" placeholder="********" style="width:100%; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                        </div>
                     </div>
+                </div>
+                <div style="display:flex; gap:8px; justify-content:flex-end;">
+                    <button class="btn" onclick="document.getElementById('addSourceForm').style.display='none'">Cancelar</button>
+                    <button class="btn primary" onclick="addSource()">Guardar y descargar</button>
                 </div>
             </div>
 
@@ -282,6 +299,14 @@
 {% block scripts %}
     <script>
         const EXPERT_ID = {{ expert.id }};
+
+        // ── Show/hide login fields based on source type ──
+        document.getElementById('srcType').addEventListener('change', toggleLoginFields);
+        function toggleLoginFields() {
+            const type = document.getElementById('srcType').value;
+            document.getElementById('loginFields').style.display =
+                (type === 'authenticated') ? 'block' : 'none';
+        }
 
         // ── Progress overlay helpers ──
         let _progressStart = null;
@@ -383,6 +408,9 @@
                 use_browser: document.getElementById('srcBrowser').checked,
                 allowed_domains: document.getElementById('srcDomains').value.trim(),
                 min_content_length: parseInt(document.getElementById('srcMinContent').value) || 2000,
+                login_url: document.getElementById('srcLoginUrl').value.trim(),
+                login_username: document.getElementById('srcLoginUser').value.trim(),
+                login_password: document.getElementById('srcLoginPass').value.trim(),
             });
             if (!data.ok) { showToast(data.error || 'Error', 'error'); return; }
 

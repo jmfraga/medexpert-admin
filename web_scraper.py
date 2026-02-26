@@ -33,6 +33,212 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
 }
 
+# Stealth JS to reduce headless browser detection
+STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+window.navigator.chrome = {runtime: {}};
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en', 'es']});
+"""
+
+COOKIE_ACCEPT_SELECTORS = [
+    '#onetrust-accept-btn-handler',
+    'button:has-text("Accept all cookies")',
+    'button:has-text("Accept All")',
+    'button:has-text("Accept all")',
+    'button[id*="accept"]',
+    'button:has-text("I Accept")',
+    'button:has-text("Agree")',
+    'button:has-text("Accept Cookies")',
+    '.cookie-accept',
+    '#cookie-accept',
+]
+
+
+async def _accept_cookies(page):
+    """Try to click cookie consent buttons on a Playwright page."""
+    for selector in COOKIE_ACCEPT_SELECTORS:
+        try:
+            btn = page.locator(selector).first
+            if await btn.is_visible(timeout=1500):
+                await btn.click()
+                await page.wait_for_timeout(1000)
+                console.print("  [dim]Cookies accepted[/dim]")
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _browser_login(context, login_url, username, password, redirect_domain=""):
+    """Login to a site using Playwright browser context.
+    Supports multi-step login flows (e.g. Elsevier: email → Continue → password → Sign in).
+    If a CAPTCHA/Cloudflare challenge is detected, waits for user to solve it manually.
+    redirect_domain: the target domain to detect successful login (e.g. 'annalsofoncology.org').
+    Returns True on apparent success.
+    """
+    page = await context.new_page()
+    try:
+        console.print(f"[cyan]Browser login: {login_url[:80]}[/cyan]")
+        await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(3000)
+
+        # Accept cookies first
+        await _accept_cookies(page)
+
+        # Fill username/email (use click + type to trigger JS validation events)
+        filled_user = False
+        for selector in ['#bdd-email', 'input[name="username"]', 'input[name="email"]',
+                         'input[type="email"]', 'input[name="login"]',
+                         '#username', '#email', '#login-email',
+                         'input[autocomplete="username"]', 'input[autocomplete="email"]']:
+            try:
+                el = page.locator(selector).first
+                if await el.is_visible(timeout=1000):
+                    await el.click()
+                    await el.fill("")  # Clear first
+                    await el.type(username, delay=50)  # Type char by char
+                    await page.wait_for_timeout(500)
+                    filled_user = True
+                    console.print(f"  [dim]Typed username: {selector}[/dim]")
+                    break
+            except Exception:
+                continue
+
+        if not filled_user:
+            try:
+                first_input = page.locator('input[type="text"], input[type="email"]').first
+                if await first_input.is_visible(timeout=1000):
+                    await first_input.click()
+                    await first_input.type(username, delay=50)
+                    filled_user = True
+            except Exception:
+                pass
+
+        if not filled_user:
+            console.print(f"[red]Browser login: could not find username field[/red]")
+            return False
+
+        # Check if password field is already visible (single-step login)
+        pw_visible = False
+        try:
+            pw_field = page.locator('input[type="password"]').first
+            pw_visible = await pw_field.is_visible(timeout=1000)
+        except Exception:
+            pass
+
+        if pw_visible:
+            # Single-step: fill password directly
+            await pw_field.click()
+            await pw_field.type(password, delay=30)
+            console.print(f"  [dim]Single-step login[/dim]")
+        else:
+            # Multi-step: click Continue/Next first, then wait for password field
+            console.print(f"  [dim]Multi-step login: clicking Continue...[/dim]")
+            clicked_continue = False
+            for selector in ['#bdd-elsPrimaryBtn', '#btn-continue',
+                             'button:has-text("Continue")', 'button:has-text("Continuar")',
+                             'button:has-text("Next")', 'button:has-text("Siguiente")',
+                             'button[type="submit"]', 'input[type="submit"]']:
+                try:
+                    btn = page.locator(selector).first
+                    if await btn.is_visible(timeout=1000):
+                        await btn.click()
+                        clicked_continue = True
+                        console.print(f"  [dim]Clicked: {selector}[/dim]")
+                        break
+                except Exception:
+                    continue
+
+            if not clicked_continue:
+                await page.keyboard.press("Enter")
+
+            # Wait for password field OR detect CAPTCHA/redirect
+            pw_field = None
+            for pw_sel in ['#bdd-password', 'input[type="password"]']:
+                try:
+                    candidate = page.locator(pw_sel).first
+                    await candidate.wait_for(state="visible", timeout=10000)
+                    pw_field = candidate
+                    console.print(f"  [dim]Found password: {pw_sel}[/dim]")
+                    break
+                except Exception:
+                    continue
+
+            if pw_field:
+                await page.wait_for_timeout(500)
+                await pw_field.click()
+                await pw_field.type(password, delay=30)
+                console.print(f"  [dim]Typed password (step 2)[/dim]")
+            else:
+                # No password field — might be CAPTCHA, Cloudflare, or auto-redirecting
+                # Wait for user to solve CAPTCHA or for redirect to complete
+                console.print(f"[bold yellow]⏳ CAPTCHA o verificacion detectada. Resuelve en la ventana del browser...[/bold yellow]")
+                console.print(f"[yellow]   Esperando hasta 120s para que completes el login...[/yellow]")
+
+                # Poll for successful redirect to target domain
+                for i in range(60):  # 120 seconds max (2s intervals)
+                    await page.wait_for_timeout(2000)
+                    current_url = page.url
+                    # Check if we've been redirected to the target site
+                    if redirect_domain and redirect_domain in current_url:
+                        console.print(f"[green]Login redirect detected → {current_url[:80]}[/green]")
+                        return True
+                    # Check if login page is no longer showing
+                    if not ("authorization" in current_url or "login" in current_url.lower()
+                            or "cloudflare" in current_url.lower() or "verify" in current_url.lower()
+                            or "secure.jbs" in current_url):
+                        console.print(f"[green]Login appears complete → {current_url[:80]}[/green]")
+                        return True
+
+                console.print(f"[red]Login timeout (120s). Current URL: {page.url[:80]}[/red]")
+                return False
+
+        # Submit the login form
+        submitted = False
+        for selector in ['#bdd-elsPrimaryBtn', 'button[type="submit"]', 'input[type="submit"]',
+                         'button:has-text("Sign In")', 'button:has-text("Sign in")',
+                         'button:has-text("Log In")', 'button:has-text("Log in")',
+                         'button:has-text("Login")', 'button:has-text("Iniciar")',
+                         '#login-submit', '.login-submit']:
+            try:
+                btn = page.locator(selector).first
+                if await btn.is_visible(timeout=1000):
+                    await btn.click()
+                    submitted = True
+                    console.print(f"  [dim]Submitted: {selector}[/dim]")
+                    break
+            except Exception:
+                continue
+
+        if not submitted:
+            await page.keyboard.press("Enter")
+
+        # Wait for navigation/redirect after login
+        console.print(f"  [dim]Waiting for redirect...[/dim]")
+        await page.wait_for_timeout(8000)
+
+        # Check success
+        current_url = page.url
+        if redirect_domain and redirect_domain in current_url:
+            console.print(f"[green]Browser login successful → {current_url[:80]}[/green]")
+            return True
+
+        on_login_page = "authorization" in current_url or "login" in current_url.lower()
+        has_password = await page.locator('input[type="password"]').count() > 0
+
+        if on_login_page and has_password:
+            console.print(f"[yellow]Browser login may have failed (still on login page: {current_url[:60]})[/yellow]")
+            return False
+
+        console.print(f"[green]Browser login successful → {current_url[:80]}[/green]")
+        return True
+    except Exception as e:
+        console.print(f"[red]Browser login error: {e}[/red]")
+        return False
+    finally:
+        await page.close()
+
 # ─────────────────────────────────────────────
 # Known Sources Catalog
 # ─────────────────────────────────────────────
@@ -249,22 +455,29 @@ async def _fetch_with_browser(url: str, wait_selector: str = "", wait_ms: int = 
     """Fetch a page using Playwright async headless browser (for SPAs).
     Returns the fully rendered HTML after JavaScript execution.
     Uses domcontentloaded + fixed wait to avoid hanging on analytics-heavy pages.
-    Total timeout: 45 seconds.
+    Includes stealth measures and cookie consent handling.
+    Total timeout: 60 seconds.
     """
     import asyncio as _asyncio
     from playwright.async_api import async_playwright
 
     async def _do_fetch():
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--disable-blink-features=AutomationControlled'],
+            )
             try:
-                page = await browser.new_page(
+                context = await browser.new_context(
                     user_agent=HEADERS["User-Agent"],
                     viewport={"width": 1280, "height": 800},
+                    locale="en-US",
                 )
+                await context.add_init_script(STEALTH_JS)
+                page = await context.new_page()
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                # Wait for JS to render content
                 await page.wait_for_timeout(wait_ms)
+                await _accept_cookies(page)
                 if wait_selector:
                     try:
                         await page.wait_for_selector(wait_selector, timeout=5000)
@@ -487,7 +700,8 @@ class GuidelineScraper:
               url_exclude: str = "", css_selector: str = "",
               max_pages: int = 200, use_browser: bool = False,
               allowed_domains: list[str] = None,
-              min_content_length: int = 2000) -> list[dict]:
+              min_content_length: int = 2000,
+              login_url: str = "", login_user: str = "", login_pass: str = "") -> list[dict]:
         """Crawl from seed URL following links up to max_depth levels.
         Returns list of {url, title, text} for pages with extractable content.
         depth=0 means seed page only (same as single fetch).
@@ -496,6 +710,8 @@ class GuidelineScraper:
             'pattern0||pattern1||pattern2' applies pattern0 at depth 0, pattern1 at depth 1, etc.
             A single pattern (no '||') applies at all depths.
         use_browser: if True, use Playwright headless browser for SPA sites.
+            When combined with login credentials, creates a persistent authenticated session.
+        login_url/login_user/login_pass: browser-based login before crawling.
         """
         visited = set()
         results = []
@@ -515,10 +731,40 @@ class GuidelineScraper:
 
         seed_domain = urlparse(seed_url).netloc
 
+        # Browser lifecycle: create persistent context with optional login
+        browser = None
+        browser_context = None
+        pw_instance = None
+
+        if use_browser:
+            from playwright.async_api import async_playwright
+            pw_instance = await async_playwright().start()
+
+            # Use visible browser when login is needed (for CAPTCHA solving)
+            needs_login = bool(login_url and login_user and login_pass)
+            browser = await pw_instance.chromium.launch(
+                headless=not needs_login,
+                args=['--disable-blink-features=AutomationControlled'],
+            )
+            browser_context = await browser.new_context(
+                user_agent=HEADERS["User-Agent"],
+                viewport={"width": 1280, "height": 800},
+                locale="en-US",
+            )
+            await browser_context.add_init_script(STEALTH_JS)
+
+            # Login if credentials provided (visible browser for CAPTCHA)
+            if needs_login:
+                redirect_domain = urlparse(seed_url).netloc
+                logged_in = await _browser_login(
+                    browser_context, login_url, login_user, login_pass,
+                    redirect_domain=redirect_domain,
+                )
+                if not logged_in:
+                    console.print("[yellow]Warning: browser login may have failed, continuing anyway[/yellow]")
+
         async def _fetch_page(url):
-            """Fetch page HTML, using browser or requests based on setting.
-            External domains (articles) always use requests (not browser).
-            """
+            """Fetch page HTML using shared browser context or requests."""
             if url.lower().endswith(".pdf"):
                 # Always use requests for PDFs
                 domain = urlparse(url).netloc
@@ -527,11 +773,29 @@ class GuidelineScraper:
                 resp.raise_for_status()
                 return {"html": None, "pdf_bytes": resp.content}
 
-            if use_browser:
+            if use_browser and browser_context:
                 domain = urlparse(url).netloc
-                _rate_limit(domain)
-                html = await _fetch_with_browser(url, wait_ms=8000)
-                return {"html": html, "pdf_bytes": None}
+                # Use longer rate limit for external domains
+                if domain != seed_domain:
+                    now = time.time()
+                    last = _domain_last_request.get(domain, 0)
+                    wait_time = RATE_LIMIT_EXTERNAL_SECONDS - (now - last)
+                    if wait_time > 0:
+                        time.sleep(wait_time)
+                    _domain_last_request[domain] = time.time()
+                else:
+                    _rate_limit(domain)
+
+                page = await browser_context.new_page()
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    await page.wait_for_timeout(8000)
+                    await _accept_cookies(page)
+                    await page.wait_for_timeout(1000)
+                    html = await page.content()
+                    return {"html": html, "pdf_bytes": None}
+                finally:
+                    await page.close()
             else:
                 domain = urlparse(url).netloc
                 _rate_limit(domain)
@@ -585,9 +849,30 @@ class GuidelineScraper:
                 console.print(f"  [green]Contenido: {title[:60]} ({len(text)} chars)[/green]")
 
         mode = "browser" if use_browser else "requests"
+        login_info = f", login: {login_url[:40]}" if login_url else ""
         pattern_desc = " → ".join(depth_patterns) if depth_patterns else (url_pattern or "sin filtro")
-        console.print(f"[bold cyan]Crawling {seed_url} (profundidad: {max_depth}, modo: {mode}, patron: {pattern_desc}, excluir: {url_exclude or 'nada'})[/bold cyan]")
-        await _crawl(seed_url, 0)
+        console.print(f"[bold cyan]Crawling {seed_url} (profundidad: {max_depth}, modo: {mode}{login_info}, patron: {pattern_desc}, excluir: {url_exclude or 'nada'})[/bold cyan]")
+
+        try:
+            await _crawl(seed_url, 0)
+        finally:
+            # Clean up browser — each step in its own try/except
+            if browser_context:
+                try:
+                    await browser_context.close()
+                except Exception:
+                    pass
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            if pw_instance:
+                try:
+                    await pw_instance.stop()
+                except Exception:
+                    pass
+
         console.print(f"[bold green]Crawl completado: {len(results)} paginas con contenido, {len(visited)} visitadas[/bold green]")
         return results
 
@@ -659,7 +944,9 @@ class GuidelineScraper:
         login_user = source.get("login_username", "")
         login_pass = source.get("login_password", "")
 
-        if login_url and login_user and login_pass:
+        # For browser-based crawl, login happens inside Playwright (shared session)
+        # For requests-based, login with requests.Session
+        if login_url and login_user and login_pass and not use_browser:
             login_result = self.login(login_url, login_user, login_pass)
             if not login_result["ok"]:
                 db.update_web_source_status(
@@ -687,6 +974,9 @@ class GuidelineScraper:
                 use_browser=use_browser,
                 allowed_domains=extra_domains,
                 min_content_length=min_len,
+                login_url=login_url if use_browser else "",
+                login_user=login_user if use_browser else "",
+                login_pass=login_pass if use_browser else "",
             )
 
             if not pages:
