@@ -21,6 +21,8 @@ data/experts/*/sessions/
 data/clients/
 data/packages/
 data/*.db
+data/benchmarks/
+data/bot_pdfs/
 
 # Scraper downloads
 scraper/downloads/

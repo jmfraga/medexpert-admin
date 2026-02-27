@@ -20,9 +20,13 @@ playwright==1.49.1
 # PDF processing
 PyMuPDF==1.25.3
 
-# LLM clients (for license injection)
+# LLM clients
 anthropic==0.42.0
 openai==1.58.1
+
+# Telegram Bot
+python-telegram-bot==21.10
+faster-whisper==1.1.0
 
 # Utilities
 python-dotenv==1.0.1

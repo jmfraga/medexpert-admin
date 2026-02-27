@@ -1,10 +1,10 @@
 # MedExpert Admin - Expert Management & Distribution
 
-Service provider tool for managing medical experts, clinical guidelines (RAG), client licensing, and distribution. Runs on a Mac or server and pushes configuration, guidelines, and licenses to client devices via Tailscale.
+Service provider platform for medical AI consultations. Manages clinical guidelines (RAG), runs a B2C Telegram bot for doctor consultations, and distributes knowledge to B2B client devices.
 
-Part of the [MedExpert](https://github.com/jmfraga/MedExpert) ecosystem, split into:
-- **[medexpert-client](https://github.com/jmfraga/medexpert-client)** — Doctor-facing app with live transcription + AI consultation
-- **[medexpert-admin](https://github.com/jmfraga/medexpert-admin)** (this repo) — Admin service for expert management, RAG indexing, and client distribution
+Part of the [MedExpert](https://github.com/jmfraga/MedExpert) ecosystem:
+- **[medexpert-admin](https://github.com/jmfraga/medexpert-admin)** (this repo) — Admin platform + Telegram bot (B2C priority)
+- **[medexpert-client](https://github.com/jmfraga/medexpert-client)** — Doctor-facing app with live transcription + AI consultation (B2B)
 
 ## Features
 
@@ -30,12 +30,25 @@ Part of the [MedExpert](https://github.com/jmfraga/MedExpert) ecosystem, split i
 - **LLM configuration** — Set default provider and model for client licenses
 - **Dashboard** — Overview of experts, clients, guidelines, and distribution status
 
-## Available LLM Models
+## LLM Architecture
+
+Tiered model strategy optimized for cost and quality:
+
+| Tier | Model | Provider | Use |
+|---|---|---|---|
+| Base | GPT-OSS 20B | Groq (→ local Ollama) | All initial responses (~2s) |
+| Deepen (free/basic) | GPT-OSS 120B | Groq | "Profundizar" button |
+| Deepen (premium) | Claude Opus 4.6 | Anthropic | Premium deepening (1/day) |
+
+**Plans:** 5 free queries → Plan Básico $299 MXN/mes → Plan Premium $499 MXN/mes
+
+Additional models available for admin/client configuration:
 
 | Provider | Models |
 |---|---|
 | Anthropic | Opus 4.6, Sonnet 4.6, Sonnet 4, Haiku 4.5 |
 | OpenAI | GPT-5.1, GPT-4.1, GPT-4.1 Mini, GPT-4.1 Nano |
+| Groq | GPT-OSS 20B, GPT-OSS 120B, Llama 3.1 8B |
 
 ## Quick Start
 
@@ -55,7 +68,10 @@ Open http://localhost:8081
 ```
 medexpert-admin/
 ├── app.py                 # FastAPI main app (dashboard, experts, clients, config)
-├── database.py            # SQLite: experts, clients, web_sources, glossary, tickets, settings
+├── bot.py                 # Telegram bot entry point (per-specialty)
+├── bot_brain.py           # LLM + RAG + bilingual search + Profundizar
+├── llm_benchmark.py       # LLM model comparison tool (5 models, PDF output)
+├── database.py            # SQLite: experts, clients, bot_users, consultations, etc.
 ├── rag_engine.py          # RAG engine (read/write) with ChromaDB
 ├── license_server.py      # License & config generation for clients
 ├── distributor.py         # Push ChromaDB/config/glossary/license via rsync/scp
@@ -76,9 +92,35 @@ medexpert-admin/
     ├── clients/           # Generated license/config per client
     └── experts/
         └── <specialty>/
-            ├── chromadb/  # Vector DB (indexed here, pushed to clients)
+            ├── chromadb/  # Vector DB (indexed here, pushed to clients & bot)
             └── guides/    # Source guideline documents
 ```
+
+## Telegram Bot
+
+B2C channel — per-specialty Telegram bots for doctor consultations. Shares the same ChromaDB and database as the admin.
+
+```bash
+# 1. Create bot with @BotFather on Telegram
+# 2. Add token to .env
+TELEGRAM_BOT_TOKEN=your_token_here
+
+# 3. Run the bot
+python bot.py                        # Default: oncologia
+python bot.py --specialty cardio     # Other specialty
+```
+
+**Features:**
+- Voice and text clinical consultations
+- Bilingual RAG search (Spanish queries + English clinical translation for NCCN/ESMO)
+- Source diversification: NCCN/ESMO prioritized over IMSS
+- "Profundizar" button for deeper analysis (tiered by plan)
+- Whisper transcription for voice messages (local, private)
+- PDF export with full citations per consultation
+- 5 free queries, Plan Básico $299/mes, Plan Premium $499/mes
+- User tracking, referral codes, usage analytics
+
+**Architecture:** Bot and Admin run on the same server, sharing ChromaDB. Admin indexes guidelines, bot queries them read-only. Planned deployment: Mac Mini M1 (24/7) with API-only, then Mac Mini M4 Pro with local Ollama.
 
 ## Configuration
 
@@ -87,8 +129,12 @@ Environment variables (`.env`):
 | Variable | Default | Description |
 |---|---|---|
 | `ADMIN_PORT` | `8081` | Web server port |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key (injected into client licenses) |
-| `OPENAI_API_KEY` | — | OpenAI API key (injected into client licenses) |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key (premium deepen) |
+| `OPENAI_API_KEY` | — | OpenAI API key |
+| `GROQ_API_KEY` | — | Groq API key (base + deepen models) |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from BotFather |
+| `BOT_SPECIALTY` | `oncologia` | Default specialty for the bot |
+| `BOT_WHISPER_MODEL` | `medium` | Whisper model for voice messages |
 
 Additional settings (default LLM provider/model) are configured from the web UI and persisted in the database.
 

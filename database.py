@@ -149,6 +149,39 @@ def init_db():
             resolved_at TEXT,
             FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
         );
+
+        -- Telegram Bot Users
+        CREATE TABLE IF NOT EXISTS bot_users (
+            telegram_id INTEGER PRIMARY KEY,
+            username TEXT DEFAULT '',
+            first_name TEXT DEFAULT '',
+            last_name TEXT DEFAULT '',
+            specialty TEXT DEFAULT '',
+            is_verified INTEGER DEFAULT 0,
+            referral_code TEXT UNIQUE,
+            referred_by INTEGER,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_activity TEXT
+        );
+
+        -- Telegram Bot Consultations
+        CREATE TABLE IF NOT EXISTS bot_consultations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            specialty TEXT NOT NULL,
+            query_type TEXT NOT NULL CHECK(query_type IN ('voice', 'text')),
+            query_text TEXT DEFAULT '',
+            response_text TEXT DEFAULT '',
+            response_time_seconds REAL DEFAULT 0,
+            llm_provider TEXT DEFAULT '',
+            llm_model TEXT DEFAULT '',
+            tokens_input INTEGER DEFAULT 0,
+            tokens_output INTEGER DEFAULT 0,
+            rag_chunks_used INTEGER DEFAULT 0,
+            is_free_tier INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (telegram_id) REFERENCES bot_users(telegram_id) ON DELETE CASCADE
+        );
     """)
     conn.commit()
 
@@ -166,6 +199,21 @@ def init_db():
     # Migrations
     try:
         conn.execute("ALTER TABLE clients ADD COLUMN client_config TEXT DEFAULT '{}'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE bot_consultations ADD COLUMN citations_json TEXT DEFAULT '[]'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE bot_consultations ADD COLUMN is_deepening INTEGER DEFAULT 0")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE bot_consultations ADD COLUMN parent_consultation_id INTEGER DEFAULT NULL")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
@@ -615,6 +663,18 @@ def bulk_create_glossary_terms(expert_id: int, terms: list[dict]) -> int:
         conn.close()
 
 
+def get_glossary_terms_for_expert_by_slug(expert_slug: str) -> list[dict]:
+    """Get glossary terms by expert slug (used by bot for Whisper prompt)."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT gt.* FROM glossary_terms gt
+        JOIN experts e ON gt.expert_id = e.id
+        WHERE e.slug = ? ORDER BY gt.term
+    """, (expert_slug,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_glossary_term_count(expert_id: int) -> int:
     conn = get_connection()
     row = conn.execute(
@@ -732,3 +792,202 @@ def get_all_settings() -> dict:
     rows = conn.execute("SELECT key, value FROM settings").fetchall()
     conn.close()
     return {r["key"]: r["value"] for r in rows}
+
+
+# ─────────────────────────────────────────────
+# Telegram Bot Users
+# ─────────────────────────────────────────────
+
+def get_or_create_bot_user(telegram_id: int, username: str = "",
+                           first_name: str = "", last_name: str = "",
+                           specialty: str = "") -> dict:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM bot_users WHERE telegram_id = ?",
+                           (telegram_id,)).fetchone()
+        if row:
+            # Update last_activity and username if changed
+            conn.execute("""
+                UPDATE bot_users SET last_activity = datetime('now'),
+                    username = COALESCE(NULLIF(?, ''), username),
+                    first_name = COALESCE(NULLIF(?, ''), first_name)
+                WHERE telegram_id = ?
+            """, (username, first_name, telegram_id))
+            conn.commit()
+            return dict(conn.execute("SELECT * FROM bot_users WHERE telegram_id = ?",
+                                     (telegram_id,)).fetchone())
+        # Create new user with referral code
+        ref_code = f"{specialty[:4].upper()}-{secrets.token_hex(3).upper()}" if specialty else f"ME-{secrets.token_hex(3).upper()}"
+        conn.execute("""
+            INSERT INTO bot_users (telegram_id, username, first_name, last_name,
+                                   specialty, referral_code, last_activity)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        """, (telegram_id, username, first_name, last_name, specialty, ref_code))
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM bot_users WHERE telegram_id = ?",
+                                 (telegram_id,)).fetchone())
+    finally:
+        conn.close()
+
+
+def get_bot_user(telegram_id: int) -> dict | None:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM bot_users WHERE telegram_id = ?",
+                       (telegram_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_bot_user(telegram_id: int, **kwargs):
+    conn = get_connection()
+    allowed = {"username", "first_name", "last_name", "specialty",
+               "is_verified", "referred_by", "last_activity"}
+    updates, params = [], []
+    for key, val in kwargs.items():
+        if key in allowed and val is not None:
+            updates.append(f"{key} = ?"); params.append(val)
+    if updates:
+        params.append(telegram_id)
+        conn.execute(f"UPDATE bot_users SET {', '.join(updates)} WHERE telegram_id = ?", params)
+        conn.commit()
+    conn.close()
+
+
+def count_bot_free_queries(telegram_id: int, specialty: str) -> int:
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT COUNT(*) as cnt FROM bot_consultations
+        WHERE telegram_id = ? AND specialty = ? AND is_free_tier = 1
+    """, (telegram_id, specialty)).fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+def can_bot_user_query(telegram_id: int, specialty: str, free_limit: int = 5) -> bool:
+    """Check if user can make a query (free tier or subscribed)."""
+    # TODO: Check subscription status when billing is implemented
+    used = count_bot_free_queries(telegram_id, specialty)
+    return used < free_limit
+
+
+# ─────────────────────────────────────────────
+# Telegram Bot Consultations
+# ─────────────────────────────────────────────
+
+def count_bot_deepenings_month(telegram_id: int, specialty: str) -> int:
+    """Count deepening queries this month for a user."""
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT COUNT(*) as cnt FROM bot_consultations
+        WHERE telegram_id = ? AND specialty = ? AND is_deepening = 1
+        AND created_at >= date('now', 'start of month')
+    """, (telegram_id, specialty)).fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+def count_bot_opus_deepenings_today(telegram_id: int, specialty: str) -> int:
+    """Count Opus (premium) deepenings today for a user."""
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT COUNT(*) as cnt FROM bot_consultations
+        WHERE telegram_id = ? AND specialty = ? AND is_deepening = 1
+        AND llm_model = 'claude-opus-4-6'
+        AND date(created_at) = date('now')
+    """, (telegram_id, specialty)).fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+def log_bot_consultation(telegram_id: int, specialty: str, query_type: str,
+                         query_text: str = "", response_text: str = "",
+                         response_time_seconds: float = 0,
+                         llm_provider: str = "", llm_model: str = "",
+                         tokens_input: int = 0, tokens_output: int = 0,
+                         rag_chunks_used: int = 0, is_free_tier: bool = True,
+                         citations: list[str] | None = None,
+                         is_deepening: bool = False,
+                         parent_consultation_id: int | None = None) -> int:
+    import json
+    citations_json = json.dumps(citations or [])
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            INSERT INTO bot_consultations
+                (telegram_id, specialty, query_type, query_text, response_text,
+                 response_time_seconds, llm_provider, llm_model,
+                 tokens_input, tokens_output, rag_chunks_used, is_free_tier,
+                 citations_json, is_deepening, parent_consultation_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (telegram_id, specialty, query_type, query_text, response_text,
+              response_time_seconds, llm_provider, llm_model,
+              tokens_input, tokens_output, rag_chunks_used,
+              1 if is_free_tier else 0, citations_json,
+              1 if is_deepening else 0, parent_consultation_id))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_bot_stats() -> dict:
+    """Get bot usage statistics for admin dashboard."""
+    conn = get_connection()
+    try:
+        total_users = conn.execute("SELECT COUNT(*) as cnt FROM bot_users").fetchone()["cnt"]
+        verified_users = conn.execute("SELECT COUNT(*) as cnt FROM bot_users WHERE is_verified = 1").fetchone()["cnt"]
+        total_queries = conn.execute("SELECT COUNT(*) as cnt FROM bot_consultations").fetchone()["cnt"]
+        voice_queries = conn.execute("SELECT COUNT(*) as cnt FROM bot_consultations WHERE query_type = 'voice'").fetchone()["cnt"]
+        text_queries = conn.execute("SELECT COUNT(*) as cnt FROM bot_consultations WHERE query_type = 'text'").fetchone()["cnt"]
+        today_queries = conn.execute("""
+            SELECT COUNT(*) as cnt FROM bot_consultations
+            WHERE date(created_at) = date('now')
+        """).fetchone()["cnt"]
+        # Users active in last 7 days
+        active_7d = conn.execute("""
+            SELECT COUNT(*) as cnt FROM bot_users
+            WHERE last_activity >= datetime('now', '-7 days')
+        """).fetchone()["cnt"]
+        return {
+            "total_users": total_users,
+            "verified_users": verified_users,
+            "active_7d": active_7d,
+            "total_queries": total_queries,
+            "voice_queries": voice_queries,
+            "text_queries": text_queries,
+            "today_queries": today_queries,
+        }
+    finally:
+        conn.close()
+
+
+def get_bot_consultation_by_id(consultation_id: int) -> dict | None:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM bot_consultations WHERE id = ?",
+                       (consultation_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_bot_recent_consultations(limit: int = 50) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT bc.*, bu.username, bu.first_name
+        FROM bot_consultations bc
+        LEFT JOIN bot_users bu ON bc.telegram_id = bu.telegram_id
+        ORDER BY bc.created_at DESC LIMIT ?
+    """, (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_bot_users() -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT bu.*,
+            (SELECT COUNT(*) FROM bot_consultations bc WHERE bc.telegram_id = bu.telegram_id) as query_count
+        FROM bot_users bu
+        ORDER BY bu.last_activity DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
