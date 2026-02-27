@@ -12,8 +12,11 @@ import sys
 import json
 import asyncio
 import argparse
+import logging
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger("medexpert.admin")
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -808,6 +811,76 @@ async def test_api_connection(request: Request):
             return JSONResponse({"ok": False, "error": f"Provider desconocido: {provider}"})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)})
+
+
+# ─────────────────────────────────────────────
+# Stripe Webhook
+# ─────────────────────────────────────────────
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events for subscription management."""
+    import stripe
+
+    stripe_key = os.getenv("STRIPE_SECRET_KEY")
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+
+    if not stripe_key:
+        return JSONResponse({"error": "Stripe not configured"}, status_code=500)
+
+    stripe.api_key = stripe_key
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    try:
+        if webhook_secret:
+            event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+        else:
+            # Dev mode: parse without signature verification
+            import json
+            event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
+    except (ValueError, stripe.error.SignatureVerificationError) as e:
+        logger.error(f"Stripe webhook error: {e}")
+        return JSONResponse({"error": "Invalid signature"}, status_code=400)
+
+    # Handle checkout completed
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        telegram_id = int(session.get("client_reference_id") or
+                          session.get("metadata", {}).get("telegram_id", 0))
+        plan = session.get("metadata", {}).get("plan", "basic")
+        customer_id = session.get("customer")
+
+        if telegram_id:
+            db.update_bot_user_subscription(
+                telegram_id=telegram_id,
+                plan=plan,
+                status="active",
+                stripe_customer_id=customer_id,
+            )
+            logger.info(f"Subscription activated: {telegram_id} -> {plan}")
+
+    # Handle subscription cancelled/expired
+    elif event["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
+        sub = event["data"]["object"]
+        customer_id = sub.get("customer")
+        status = sub.get("status")
+
+        if status in ("canceled", "unpaid", "past_due"):
+            # Find user by stripe customer ID and cancel
+            conn = db.get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT telegram_id FROM bot_users WHERE stripe_customer_id = ?",
+                    (customer_id,)
+                ).fetchone()
+                if row:
+                    db.cancel_bot_user_subscription(row["telegram_id"])
+                    logger.info(f"Subscription cancelled: {row['telegram_id']}")
+            finally:
+                conn.close()
+
+    return JSONResponse({"received": True})
 
 
 # ─────────────────────────────────────────────

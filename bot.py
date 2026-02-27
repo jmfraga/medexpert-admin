@@ -70,11 +70,22 @@ async def cmd_start(update, context):
         specialty=specialty,
     )
 
-    # Check referral code in args
+    # Check args (referral, payment redirect)
     if context.args:
-        referral_code = context.args[0]
-        if referral_code.startswith("ref_"):
-            # TODO: Process referral in Sprint 2
+        arg = context.args[0]
+        if arg == "payment_success":
+            await update.message.reply_text(
+                "Pago recibido! Tu suscripcion se activara en unos momentos.\n"
+                "Usa /estado para verificar."
+            )
+            return
+        elif arg == "payment_cancel":
+            await update.message.reply_text(
+                "Pago cancelado. Puedes intentar de nuevo con /suscribir."
+            )
+            return
+        elif arg.startswith("ref_"):
+            # TODO: Process referral
             pass
 
     free_used = db.count_bot_free_queries(user.id, specialty)
@@ -131,6 +142,7 @@ async def cmd_ayuda(update, context):
         "  /start - Reiniciar bot\n"
         "  /ayuda - Esta ayuda\n"
         "  /estado - Estado de cuenta y consultas\n"
+        "  /suscribir - Planes y suscripciones\n"
         "  /terminos - Terminos del servicio\n"
         "  /soporte - Contactar soporte\n\n"
         "<b>AVISO:</b> Herramienta de apoyo clinico.\n"
@@ -161,7 +173,16 @@ async def cmd_estado(update, context):
         f"<b>Verificacion:</b> {verified_text}\n"
         f"<b>Codigo referido:</b> <code>{bot_user.get('referral_code', 'N/A')}</code>\n\n"
         f"<b>Consultas gratis:</b> {free_used}/{FREE_QUERY_LIMIT} usadas ({free_remaining} restantes)\n"
-        f"<b>Suscripcion:</b> No activa\n\n"
+    )
+    # Show subscription status
+    user_plan = db.get_bot_user_plan(user.id)
+    if user_plan in ("basic", "premium"):
+        expires = bot_user.get("subscription_expires_at", "N/A")
+        status += f"<b>Suscripcion:</b> Plan {user_plan.capitalize()} (activa)\n"
+        status += f"<b>Vence:</b> {expires}\n\n"
+    else:
+        status += f"<b>Suscripcion:</b> No activa (/suscribir)\n\n"
+    status += (
         f"<b>Desde:</b> {bot_user.get('created_at', 'N/A')}\n"
         f"<b>Ultima actividad:</b> {bot_user.get('last_activity', 'N/A')}"
     )
@@ -187,8 +208,8 @@ async def cmd_terminos(update, context):
         "  Verificar recomendaciones contra guias oficiales\n\n"
         "<b>4. Suscripcion</b>\n"
         "  5 consultas gratuitas de prueba\n"
-        "  Plan Basico: $299 MXN/mes (consultas ilimitadas + profundizar con GPT-OSS 120B)\n"
-        "  Plan Premium: $499 MXN/mes (todo + profundizar con Claude Opus 4.6)\n"
+        "  Plan Basico: $14.99 USD/mes (consultas ilimitadas + profundizar con GPT-OSS 120B)\n"
+        "  Plan Premium: $24.99 USD/mes (todo + profundizar con Claude Opus 4.6)\n"
         "  Cancela cuando quieras, sin penalidad\n\n"
         "Contacto: /soporte"
     )
@@ -204,6 +225,127 @@ async def cmd_soporte(update, context):
         "Describe tu problema y te responderemos lo antes posible.",
         parse_mode="HTML",
     )
+
+
+async def cmd_suscribir(update, context):
+    """Handle /suscribir command — show subscription plans with Stripe checkout."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    user = update.effective_user
+    current_plan = db.get_bot_user_plan(user.id)
+
+    if current_plan in ("basic", "premium"):
+        await update.message.reply_text(
+            f"Ya tienes una suscripcion activa: <b>Plan {current_plan.capitalize()}</b>\n\n"
+            "Para cancelar o cambiar de plan: /soporte",
+            parse_mode="HTML",
+        )
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(
+            "Plan Basico - $14.99 USD/mes",
+            callback_data="subscribe_basic",
+        )],
+        [InlineKeyboardButton(
+            "Plan Premium - $24.99 USD/mes",
+            callback_data="subscribe_premium",
+        )],
+    ]
+
+    await update.message.reply_text(
+        "<b>Suscripciones MedExpert</b>\n\n"
+        "<b>Plan Basico - $14.99 USD/mes</b> (precio de lanzamiento)\n"
+        "  Consultas ilimitadas\n"
+        "  Profundizar con GPT-OSS 120B\n"
+        "  Exportar a PDF\n"
+        "  Cancela cuando quieras\n\n"
+        "<b>Plan Premium - $24.99 USD/mes</b> (precio de lanzamiento)\n"
+        "  Todo lo del Plan Basico\n"
+        "  Profundizar con Claude Opus 4.6\n"
+        "  Respuestas de maxima calidad clinica\n"
+        "  Soporte prioritario\n\n"
+        "Selecciona un plan:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_subscribe_callback(update, context):
+    """Handle subscription plan selection — create Stripe checkout."""
+    import stripe
+
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # "subscribe_basic" or "subscribe_premium"
+    plan = data.replace("subscribe_", "")
+
+    stripe_key = os.getenv("STRIPE_SECRET_KEY")
+    if not stripe_key:
+        await query.message.reply_text(
+            "Pagos no disponibles temporalmente.\n"
+            "Contacta /soporte para activar tu suscripcion manualmente."
+        )
+        logger.warning("STRIPE_SECRET_KEY not configured")
+        return
+
+    stripe.api_key = stripe_key
+
+    # Price IDs from Stripe dashboard
+    price_ids = {
+        "basic": os.getenv("STRIPE_PRICE_BASIC"),
+        "premium": os.getenv("STRIPE_PRICE_PREMIUM"),
+    }
+
+    price_id = price_ids.get(plan)
+    if not price_id:
+        await query.message.reply_text(
+            "Plan no disponible. Contacta /soporte."
+        )
+        logger.error(f"Missing STRIPE_PRICE_{plan.upper()} env var")
+        return
+
+    user = query.from_user
+    bot_username = (await context.bot.get_me()).username
+
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{"price": price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=f"https://t.me/{bot_username}?start=payment_success",
+            cancel_url=f"https://t.me/{bot_username}?start=payment_cancel",
+            metadata={
+                "telegram_id": str(user.id),
+                "plan": plan,
+            },
+            client_reference_id=str(user.id),
+        )
+
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = [[InlineKeyboardButton(
+            f"Pagar Plan {plan.capitalize()}",
+            url=session.url,
+        )]]
+
+        plan_price = "$14.99" if plan == "basic" else "$24.99"
+        await query.message.reply_text(
+            f"<b>Checkout - Plan {plan.capitalize()} ({plan_price} USD/mes)</b>\n\n"
+            "Haz clic en el boton para completar el pago con Stripe:\n"
+            "(Se aceptan tarjetas de credito y debito)",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+        logger.info(f"Stripe checkout created for {user.id} (plan={plan})")
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error: {e}")
+        await query.message.reply_text(
+            "Error al crear sesion de pago. Intenta de nuevo.\n"
+            "Si persiste: /soporte"
+        )
 
 
 async def handle_voice(update, context):
@@ -271,8 +413,9 @@ async def handle_voice(update, context):
         result = brain.query(transcript, expert_slug=specialty)
 
         # Log consultation
+        user_plan = db.get_bot_user_plan(user.id)
         free_used = db.count_bot_free_queries(user.id, specialty)
-        is_free = free_used < FREE_QUERY_LIMIT
+        is_free = user_plan == "free" and free_used < FREE_QUERY_LIMIT
         consultation_id = db.log_bot_consultation(
             telegram_id=user.id,
             specialty=specialty,
@@ -291,9 +434,10 @@ async def handle_voice(update, context):
 
         # Format and send response
         free_remaining = max(0, FREE_QUERY_LIMIT - free_used - 1)
+        show_free = free_remaining if (user_plan == "free" and is_free) else None
         main_text, footer = format_response_for_telegram(
             result,
-            free_remaining=free_remaining if is_free else None,
+            free_remaining=show_free,
         )
 
         # Delete processing message and send response
@@ -305,14 +449,15 @@ async def handle_voice(update, context):
         # Send footer (citations, free tier) with action buttons
         if footer:
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            keyboard = [[
-                InlineKeyboardButton(
-                    "Profundizar", callback_data=f"deepen_{consultation_id}"
-                ),
-                InlineKeyboardButton(
-                    "Exportar PDF", callback_data=f"pdf_{consultation_id}"
-                ),
-            ]]
+            keyboard = [
+                [
+                    InlineKeyboardButton("Profundizar", callback_data=f"deepen_{consultation_id}"),
+                    InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{consultation_id}"),
+                ],
+                [
+                    InlineKeyboardButton("¿Te sirvió?", callback_data=f"eval_{consultation_id}"),
+                ],
+            ]
             await update.message.reply_text(
                 footer, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -363,8 +508,9 @@ async def handle_text(update, context):
         result = brain.query(text, expert_slug=specialty)
 
         # Log consultation
+        user_plan = db.get_bot_user_plan(user.id)
         free_used = db.count_bot_free_queries(user.id, specialty)
-        is_free = free_used < FREE_QUERY_LIMIT
+        is_free = user_plan == "free" and free_used < FREE_QUERY_LIMIT
         consultation_id = db.log_bot_consultation(
             telegram_id=user.id,
             specialty=specialty,
@@ -383,9 +529,10 @@ async def handle_text(update, context):
 
         # Format and send response
         free_remaining = max(0, FREE_QUERY_LIMIT - free_used - 1)
+        show_free = free_remaining if (user_plan == "free" and is_free) else None
         main_text, footer = format_response_for_telegram(
             result,
-            free_remaining=free_remaining if is_free else None,
+            free_remaining=show_free,
         )
 
         # Delete processing message and send response
@@ -397,14 +544,15 @@ async def handle_text(update, context):
         # Send footer (citations, free tier) with action buttons
         if footer:
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            keyboard = [[
-                InlineKeyboardButton(
-                    "Profundizar", callback_data=f"deepen_{consultation_id}"
-                ),
-                InlineKeyboardButton(
-                    "Exportar PDF", callback_data=f"pdf_{consultation_id}"
-                ),
-            ]]
+            keyboard = [
+                [
+                    InlineKeyboardButton("Profundizar", callback_data=f"deepen_{consultation_id}"),
+                    InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{consultation_id}"),
+                ],
+                [
+                    InlineKeyboardButton("¿Te sirvió?", callback_data=f"eval_{consultation_id}"),
+                ],
+            ]
             await update.message.reply_text(
                 footer, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -425,14 +573,14 @@ async def _show_limit_reached(update):
     msg = (
         "<b>Limite de consultas gratuitas alcanzado</b>\n\n"
         "Has usado tus 5 consultas gratis.\n\n"
-        "<b>Plan Basico - $299 MXN/mes</b>\n"
+        "<b>Plan Basico - $14.99 USD/mes</b> (precio de lanzamiento)\n"
         "  Consultas ilimitadas\n"
-        "  Profundizar 1 vez al dia con GPT-OSS 120B\n"
+        "  Profundizar con GPT-OSS 120B\n"
         "  Respuesta en menos de 5 segundos\n"
         "  Cancela cuando quieras\n\n"
-        "<b>Plan Premium - $499 MXN/mes</b>\n"
+        "<b>Plan Premium - $24.99 USD/mes</b> (precio de lanzamiento)\n"
         "  Todo lo del Plan Basico\n"
-        "  Profundizar 1 vez al dia con Claude Opus 4.6\n"
+        "  Profundizar con Claude Opus 4.6\n"
         "  Respuestas de maxima calidad clinica\n"
         "  Soporte prioritario\n\n"
         "/suscribir para activar\n\n"
@@ -497,9 +645,8 @@ async def handle_deepen_callback(update, context):
         return
 
     # Determine user tier and deepening model
-    # TODO: Check actual subscription status when billing is implemented
     bot_user = db.get_bot_user(user_id)
-    user_plan = "free"  # Will be: "free", "basic", "premium"
+    user_plan = db.get_bot_user_plan(user_id)
 
     if user_plan == "premium":
         # Premium: Opus, max 1/day
@@ -524,8 +671,8 @@ async def handle_deepen_callback(update, context):
             await query.message.reply_text(
                 "No tienes consultas gratis restantes.\n"
                 "Profundizar consume 1 consulta.\n\n"
-                "Plan Basico ($299/mes): consultas ilimitadas + profundizar con GPT-OSS 120B\n"
-                "Plan Premium ($499/mes): todo + profundizar con Claude Opus 4.6\n\n"
+                "Plan Basico ($14.99 USD/mes): consultas ilimitadas + profundizar con GPT-OSS 120B\n"
+                "Plan Premium ($24.99 USD/mes): todo + profundizar con Claude Opus 4.6\n\n"
                 "/suscribir para activar"
             )
             return
@@ -624,6 +771,62 @@ async def _send_long_message_from_callback(callback_query, text: str, max_len: i
 
     for part in parts:
         await callback_query.message.reply_text(part)
+
+
+FEEDBACK_OPTIONS = {
+    "fb_a": "Mejoró mi manera de ver las cosas",
+    "fb_b": "Reforzó mi plan",
+    "fb_c": "Información incorrecta",
+    "fb_d": "Información incompleta",
+    "fb_e": "No me sirvió (otra razón)",
+}
+
+
+async def handle_feedback_prompt(update, context):
+    """Handle 'Evaluar' button — show feedback options."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data.startswith("eval_"):
+        return
+
+    consultation_id = int(data.split("_")[1])
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [
+        [InlineKeyboardButton(f"a) {FEEDBACK_OPTIONS['fb_a']}", callback_data=f"fb_a_{consultation_id}")],
+        [InlineKeyboardButton(f"b) {FEEDBACK_OPTIONS['fb_b']}", callback_data=f"fb_b_{consultation_id}")],
+        [InlineKeyboardButton(f"c) {FEEDBACK_OPTIONS['fb_c']}", callback_data=f"fb_c_{consultation_id}")],
+        [InlineKeyboardButton(f"d) {FEEDBACK_OPTIONS['fb_d']}", callback_data=f"fb_d_{consultation_id}")],
+        [InlineKeyboardButton(f"e) {FEEDBACK_OPTIONS['fb_e']}", callback_data=f"fb_e_{consultation_id}")],
+    ]
+    await query.message.reply_text(
+        "¿La respuesta te sirvió?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_feedback_response(update, context):
+    """Handle feedback selection — save to DB."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # e.g. "fb_a_123"
+    parts = data.split("_")
+    feedback_key = f"{parts[0]}_{parts[1]}"  # "fb_a"
+    consultation_id = int(parts[2])
+
+    feedback_text = FEEDBACK_OPTIONS.get(feedback_key, "Desconocido")
+    db.update_bot_consultation_feedback(consultation_id, feedback_text)
+
+    # Replace feedback buttons with thank you
+    try:
+        await query.edit_message_text(f"Gracias por tu feedback: {feedback_text}")
+    except Exception:
+        pass
+
+    logger.info(f"Feedback for consultation {consultation_id}: {feedback_text}")
 
 
 async def handle_pdf_callback(update, context):
@@ -734,6 +937,7 @@ def main():
     app.add_handler(CommandHandler("estado", cmd_estado))
     app.add_handler(CommandHandler("terminos", cmd_terminos))
     app.add_handler(CommandHandler("soporte", cmd_soporte))
+    app.add_handler(CommandHandler("suscribir", cmd_suscribir))
 
     # Message handlers (voice and text)
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
@@ -743,6 +947,9 @@ def main():
     from telegram.ext import CallbackQueryHandler
     app.add_handler(CallbackQueryHandler(handle_deepen_callback, pattern=r"^deepen_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_pdf_callback, pattern=r"^pdf_\d+$"))
+    app.add_handler(CallbackQueryHandler(handle_feedback_prompt, pattern=r"^eval_\d+$"))
+    app.add_handler(CallbackQueryHandler(handle_feedback_response, pattern=r"^fb_[a-e]_\d+$"))
+    app.add_handler(CallbackQueryHandler(handle_subscribe_callback, pattern=r"^subscribe_(basic|premium)$"))
 
     # Error handler
     app.add_error_handler(handle_error)

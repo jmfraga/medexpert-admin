@@ -523,7 +523,7 @@ def format_response_for_telegram(result: dict, free_remaining: int | None = None
         else:
             footer_parts.append(
                 "\nHas usado tus 5 consultas gratis.\n"
-                "Plan Basico $299/mes | Plan Premium $499/mes\n"
+                "Plan Basico $14.99 USD/mes | Plan Premium $24.99 USD/mes\n"
                 "/suscribir para activar"
             )
 

@@ -217,6 +217,24 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE bot_consultations ADD COLUMN user_feedback TEXT DEFAULT NULL")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    # Subscription fields on bot_users
+    for col, defn in [
+        ("subscription_plan", "TEXT DEFAULT 'free'"),
+        ("subscription_status", "TEXT DEFAULT NULL"),
+        ("stripe_customer_id", "TEXT DEFAULT NULL"),
+        ("subscription_started_at", "TEXT DEFAULT NULL"),
+        ("subscription_expires_at", "TEXT DEFAULT NULL"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE bot_users ADD COLUMN {col} {defn}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
     conn.close()
     console.print("[green]Database initialized[/green]")
 
@@ -865,9 +883,58 @@ def count_bot_free_queries(telegram_id: int, specialty: str) -> int:
 
 def can_bot_user_query(telegram_id: int, specialty: str, free_limit: int = 5) -> bool:
     """Check if user can make a query (free tier or subscribed)."""
-    # TODO: Check subscription status when billing is implemented
+    user = get_bot_user(telegram_id)
+    if user and user.get("subscription_plan") in ("basic", "premium"):
+        if user.get("subscription_status") == "active":
+            return True
     used = count_bot_free_queries(telegram_id, specialty)
     return used < free_limit
+
+
+def get_bot_user_plan(telegram_id: int) -> str:
+    """Return user's active plan: 'free', 'basic', or 'premium'."""
+    user = get_bot_user(telegram_id)
+    if not user:
+        return "free"
+    if user.get("subscription_plan") in ("basic", "premium"):
+        if user.get("subscription_status") == "active":
+            return user["subscription_plan"]
+    return "free"
+
+
+def update_bot_user_subscription(telegram_id: int, plan: str, status: str,
+                                  stripe_customer_id: str = None) -> bool:
+    """Update a user's subscription after Stripe payment."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE bot_users
+            SET subscription_plan = ?,
+                subscription_status = ?,
+                stripe_customer_id = COALESCE(?, stripe_customer_id),
+                subscription_started_at = datetime('now'),
+                subscription_expires_at = datetime('now', '+30 days')
+            WHERE telegram_id = ?
+        """, (plan, status, stripe_customer_id, telegram_id))
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
+
+
+def cancel_bot_user_subscription(telegram_id: int) -> bool:
+    """Cancel a user's subscription."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE bot_users
+            SET subscription_status = 'cancelled'
+            WHERE telegram_id = ?
+        """, (telegram_id,))
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
 
 
 # ─────────────────────────────────────────────
@@ -979,6 +1046,17 @@ def get_bot_recent_consultations(limit: int = 50) -> list[dict]:
     """, (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def update_bot_consultation_feedback(consultation_id: int, feedback: str) -> bool:
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE bot_consultations SET user_feedback = ? WHERE id = ?",
+                     (feedback, consultation_id))
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
 
 
 def get_all_bot_users() -> list[dict]:
