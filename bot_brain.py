@@ -496,12 +496,20 @@ def format_response_for_telegram(result: dict, free_remaining: int | None = None
 
     main_text = _clean_markdown(result["response"])
 
+    # Append disclaimer to main text (plain text, always visible)
+    main_text += (
+        "\n\n---\n"
+        "AVISO: Herramienta de apoyo clinico. "
+        "NO reemplaza el criterio medico profesional. "
+        "Verifique siempre contra guias oficiales."
+    )
+
     # Build footer with citations and metadata
     footer_parts = []
 
     citations = result.get("citations", [])
     if citations:
-        footer_parts.append("<b>Referencias:</b>")
+        footer_parts.append("\n<b>Referencias:</b>")
         for i, cite in enumerate(citations[:5], 1):
             footer_parts.append(f"  {i}. <i>{_escape_html(cite)}</i>")
 
@@ -619,17 +627,20 @@ def generate_consultation_pdf(query_text: str, response_text: str,
             y = _pdf_text(page, f"  {i}. {cite}", margin_l, y, content_w,
                           fontsize=8, color=(0.35, 0.35, 0.35))
 
-    # ── Disclaimer footer on last page ──
-    footer_y = page_h - 35
-    page.draw_line(fitz_mod.Point(margin_l, footer_y),
-                   fitz_mod.Point(page_w - margin_r, footer_y),
-                   color=(0.85, 0.85, 0.85), width=0.5)
-    page.insert_text(fitz_mod.Point(margin_l, footer_y + 12),
-                     "AVISO: Herramienta de apoyo clinico. NO reemplaza el criterio medico profesional.",
-                     fontsize=7, fontname="helv", color=(0.5, 0.5, 0.5))
-    page.insert_text(fitz_mod.Point(margin_l, footer_y + 22),
-                     f"Generado por MedExpert | {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                     fontsize=6, fontname="helv", color=(0.6, 0.6, 0.6))
+    # ── Disclaimer footer on ALL pages ──
+    disclaimer_text = "AVISO: Herramienta de apoyo clinico. NO reemplaza el criterio medico profesional."
+    generated_text = f"Generado por MedExpert | {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    for pg in doc:
+        footer_y = page_h - 35
+        pg.draw_line(fitz_mod.Point(margin_l, footer_y),
+                     fitz_mod.Point(page_w - margin_r, footer_y),
+                     color=(0.85, 0.85, 0.85), width=0.5)
+        pg.insert_text(fitz_mod.Point(margin_l, footer_y + 12),
+                       disclaimer_text,
+                       fontsize=7, fontname="hebo", color=(0.4, 0.15, 0.15))
+        pg.insert_text(fitz_mod.Point(margin_l, footer_y + 22),
+                       generated_text,
+                       fontsize=6, fontname="helv", color=(0.6, 0.6, 0.6))
 
     doc.save(pdf_path)
     doc.close()
@@ -716,13 +727,29 @@ def _wrap_text(text: str, max_chars: int) -> list[str]:
 
 # Clinical term translation map (Spanish → English)
 _CLINICAL_TRANSLATIONS = {
-    # Cancer types
+    # Cancer types (phrases — checked first as bigrams)
+    "cáncer pulmonar": "lung cancer", "cancer pulmonar": "lung cancer",
+    "cáncer de pulmón": "lung cancer", "cancer de pulmon": "lung cancer",
+    "cáncer de mama": "breast cancer", "cancer de mama": "breast cancer",
+    "cáncer de próstata": "prostate cancer", "cancer de prostata": "prostate cancer",
+    "cáncer gástrico": "gastric cancer", "cancer gastrico": "gastric cancer",
+    "cáncer de colon": "colon cancer", "cancer de colon": "colon cancer",
+    "cáncer de ovario": "ovarian cancer", "cancer de ovario": "ovarian cancer",
+    "cáncer de páncreas": "pancreatic cancer", "cancer de pancreas": "pancreatic cancer",
+    "cáncer de hígado": "liver cancer", "cancer de higado": "liver cancer",
+    "cáncer de riñón": "kidney cancer", "cancer de rinon": "kidney cancer",
+    "cáncer de vejiga": "bladder cancer", "cancer de vejiga": "bladder cancer",
+    "cáncer de tiroides": "thyroid cancer", "cancer de tiroides": "thyroid cancer",
+    "cáncer cervicouterino": "cervical cancer", "cancer cervicouterino": "cervical cancer",
+    "cabeza y cuello": "head and neck",
+    # Cancer types (single words)
     "cáncer": "cancer", "cancer": "cancer", "carcinoma": "carcinoma",
     "tumor": "tumor", "tumores": "tumors", "neoplasia": "neoplasm",
     "linfoma": "lymphoma", "melanoma": "melanoma", "sarcoma": "sarcoma",
     "leucemia": "leukemia", "mieloma": "myeloma",
     # Organs
-    "mama": "breast", "seno": "breast", "pulmón": "lung", "pulmon": "lung",
+    "mama": "breast", "seno": "breast",
+    "pulmón": "lung", "pulmon": "lung", "pulmonar": "lung",
     "próstata": "prostate", "prostata": "prostate",
     "colon": "colon", "recto": "rectum", "colorrectal": "colorectal",
     "hígado": "liver", "higado": "liver", "hepatocelular": "hepatocellular",
@@ -765,6 +792,44 @@ _CLINICAL_TRANSLATIONS = {
     "específico": "specific", "especifico": "specific",
     "marcador": "marker", "marcadores": "markers",
     "elevado": "elevated", "nivel": "level", "niveles": "levels",
+    # Adjective forms (critical for RAG matching)
+    "agudo": "acute", "aguda": "acute",
+    "crónico": "chronic", "cronico": "chronic", "crónica": "chronic", "cronica": "chronic",
+    "linfoblástica": "lymphoblastic", "linfoblastica": "lymphoblastic",
+    "linfoblástico": "lymphoblastic", "linfoblastico": "lymphoblastic",
+    "mieloide": "myeloid", "mielógeno": "myelogenous", "mielogeno": "myelogenous",
+    "folicular": "follicular", "difuso": "diffuse",
+    "escamoso": "squamous", "escamosa": "squamous",
+    "adenocarcinoma": "adenocarcinoma",
+    "microcítico": "small cell", "microcitico": "small cell",
+    "no microcítico": "non-small cell", "no microcitico": "non-small cell",
+    "células pequeñas": "small cell", "celulas pequenas": "small cell",
+    "células grandes": "large cell", "celulas grandes": "large cell",
+    "negativo": "negative", "positivo": "positive",
+    "triple negativo": "triple negative",
+    "receptor": "receptor", "receptores": "receptors",
+    "hormonal": "hormonal", "her2": "her2", "brca": "brca",
+    "resecable": "resectable", "irresecable": "unresectable",
+    "operable": "operable", "inoperable": "inoperable",
+    "avanzado": "advanced", "avanzada": "advanced",
+    "temprano": "early", "temprana": "early",
+    "invasivo": "invasive", "invasiva": "invasive",
+    "bilateral": "bilateral", "unilateral": "unilateral",
+    "primario": "primary", "primaria": "primary",
+    "secundario": "secondary", "secundaria": "secondary",
+    # More clinical terms
+    "dosis": "dose", "dosificación": "dosing", "dosificacion": "dosing",
+    "ciclo": "cycle", "ciclos": "cycles",
+    "respuesta": "response", "remisión": "remission", "remision": "remission",
+    "completa": "complete", "parcial": "partial",
+    "progresión": "progression", "progresion": "progression",
+    "resistente": "resistant", "resistencia": "resistance",
+    "toxicidad": "toxicity", "efectos": "effects", "adversos": "adverse",
+    "neutropenia": "neutropenia", "febril": "febrile",
+    "anemia": "anemia", "trombocitopenia": "thrombocytopenia",
+    "neuropatía": "neuropathy", "neuropatia": "neuropathy",
+    "náusea": "nausea", "nausea": "nausea", "vómito": "vomiting", "vomito": "vomiting",
+    "dolor": "pain", "fatiga": "fatigue",
     # Guidelines
     "guía": "guideline", "guia": "guideline",
     "recomendación": "recommendation", "recomendacion": "recommendation",
@@ -786,7 +851,15 @@ def _translate_query_to_english(text: str) -> str:
 
     i = 0
     while i < len(words):
-        # Try 2-word phrases first
+        # Try 3-word phrases first
+        if i + 2 < len(words):
+            trigram = f"{words[i]} {words[i+1]} {words[i+2]}"
+            if trigram in _CLINICAL_TRANSLATIONS:
+                translated.append(_CLINICAL_TRANSLATIONS[trigram])
+                i += 3
+                continue
+
+        # Try 2-word phrases
         if i + 1 < len(words):
             bigram = f"{words[i]} {words[i+1]}"
             if bigram in _CLINICAL_TRANSLATIONS:
