@@ -1015,14 +1015,26 @@ def get_bot_stats() -> dict:
             SELECT COUNT(*) as cnt FROM bot_users
             WHERE last_activity >= datetime('now', '-7 days')
         """).fetchone()["cnt"]
+        paid_users = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bot_users WHERE subscription_status = 'active'"
+        ).fetchone()["cnt"]
+        deepenings = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bot_consultations WHERE is_deepening = 1"
+        ).fetchone()["cnt"]
+        feedback_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bot_consultations WHERE user_feedback IS NOT NULL"
+        ).fetchone()["cnt"]
         return {
             "total_users": total_users,
             "verified_users": verified_users,
             "active_7d": active_7d,
+            "paid_users": paid_users,
             "total_queries": total_queries,
             "voice_queries": voice_queries,
             "text_queries": text_queries,
             "today_queries": today_queries,
+            "deepenings": deepenings,
+            "feedback_count": feedback_count,
         }
     finally:
         conn.close()

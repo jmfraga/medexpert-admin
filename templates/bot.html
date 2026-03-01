@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}MedExpert Admin - Telegram Bot{% endblock %}
+
+{% block extra_styles %}
+        .bot-content {
+            padding: 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .bot-header {
+            margin-bottom: 24px;
+        }
+
+        .bot-header h1 {
+            font-size: 1.4em;
+            color: #f59e0b;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .bot-header p {
+            font-size: 0.85em;
+            color: #64748b;
+        }
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: #111827;
+            border: 1px solid #1e2640;
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-card-value {
+            font-size: 1.8em;
+            font-weight: 700;
+            color: #f59e0b;
+        }
+
+        .stat-card-label {
+            font-size: 0.75em;
+            color: #64748b;
+            margin-top: 4px;
+        }
+
+        .stat-card-sub {
+            font-size: 0.7em;
+            color: #475569;
+            margin-top: 2px;
+        }
+
+        .section-title {
+            font-size: 1em;
+            color: #94a3b8;
+            font-weight: 600;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #1e2640;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 0.72em;
+            font-weight: 600;
+        }
+
+        .badge.amber { background: #92400e; color: #fbbf24; }
+        .badge.green { background: #14532d; color: #4ade80; }
+        .badge.blue { background: #1e3a5f; color: #60a5fa; }
+        .badge.red { background: #3f1219; color: #f87171; }
+        .badge.purple { background: #3b1f5e; color: #c084fc; }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82em;
+            margin-bottom: 28px;
+        }
+
+        .data-table th {
+            text-align: left;
+            padding: 10px 12px;
+            color: #64748b;
+            font-weight: 600;
+            font-size: 0.85em;
+            border-bottom: 1px solid #1e2640;
+            white-space: nowrap;
+        }
+
+        .data-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #111827;
+            color: #94a3b8;
+        }
+
+        .data-table tr:hover td {
+            background: rgba(245, 158, 11, 0.03);
+        }
+
+        .user-name {
+            color: #e0e6ed;
+            font-weight: 500;
+        }
+
+        .user-username {
+            color: #64748b;
+            font-size: 0.9em;
+        }
+
+        .query-text {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: #94a3b8;
+        }
+
+        .feedback-tag {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8em;
+        }
+
+        .feedback-positive { background: #14532d; color: #4ade80; }
+        .feedback-neutral { background: #1e3a5f; color: #60a5fa; }
+        .feedback-negative { background: #3f1219; color: #f87171; }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 16px;
+        }
+
+        .tab {
+            padding: 8px 16px;
+            border-radius: 6px;
+            background: #111827;
+            border: 1px solid #1e2640;
+            color: #64748b;
+            font-size: 0.82em;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tab:hover { color: #e0e6ed; border-color: #2a3050; }
+        .tab.active { color: #f59e0b; border-color: #92400e; background: rgba(245, 158, 11, 0.08); }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .plan-actions {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+        }
+{% endblock %}
+
+{% block content %}
+    <div class="bot-content">
+        <div class="bot-header">
+            <h1>Telegram Bot</h1>
+            <p>Estadisticas y administracion del bot de consultas</p>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-card">
+                <div class="stat-card-value">{{ stats.total_users }}</div>
+                <div class="stat-card-label">Usuarios</div>
+                <div class="stat-card-sub">{{ stats.active_7d }} activos (7d)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-value">{{ stats.paid_users }}</div>
+                <div class="stat-card-label">Suscripciones</div>
+                <div class="stat-card-sub">activas</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-value">{{ stats.total_queries }}</div>
+                <div class="stat-card-label">Consultas</div>
+                <div class="stat-card-sub">{{ stats.today_queries }} hoy</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-value">{{ stats.voice_queries }}</div>
+                <div class="stat-card-label">Voz</div>
+                <div class="stat-card-sub">{{ stats.text_queries }} texto</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-value">{{ stats.deepenings }}</div>
+                <div class="stat-card-label">Profundizar</div>
+                <div class="stat-card-sub">total</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-value">{{ stats.feedback_count }}</div>
+                <div class="stat-card-label">Feedback</div>
+                <div class="stat-card-sub">respuestas</div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('users')">Usuarios ({{ users|length }})</div>
+            <div class="tab" onclick="switchTab('consultations')">Consultas recientes</div>
+        </div>
+
+        <div id="tab-users" class="tab-content active">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Usuario</th>
+                        <th>Especialidad</th>
+                        <th>Plan</th>
+                        <th>Consultas</th>
+                        <th>Verificado</th>
+                        <th>Ultima actividad</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td>
+                            <span class="user-name">{{ u.first_name }} {{ u.last_name or '' }}</span><br>
+                            <span class="user-username">@{{ u.username or 'N/A' }}</span>
+                        </td>
+                        <td>{{ u.specialty or 'N/A' }}</td>
+                        <td>
+                            {% if u.subscription_plan == 'premium' and u.subscription_status == 'active' %}
+                                <span class="badge purple">Premium</span>
+                            {% elif u.subscription_plan == 'basic' and u.subscription_status == 'active' %}
+                                <span class="badge green">Basico</span>
+                            {% else %}
+                                <span class="badge blue">Free</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ u.query_count }}</td>
+                        <td>
+                            {% if u.is_verified %}
+                                <span class="badge green">Si</span>
+                            {% else %}
+                                <span class="badge red">No</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ (u.last_activity or 'N/A')[:16] }}</td>
+                        <td>
+                            <div class="plan-actions">
+                                <select id="plan-{{ u.telegram_id }}" style="background:#1a2040; border:1px solid #2a3050; border-radius:4px; color:#94a3b8; padding:3px 6px; font-size:0.85em;">
+                                    <option value="free" {% if not u.subscription_status or u.subscription_status != 'active' %}selected{% endif %}>Free</option>
+                                    <option value="basic" {% if u.subscription_plan == 'basic' and u.subscription_status == 'active' %}selected{% endif %}>Basico</option>
+                                    <option value="premium" {% if u.subscription_plan == 'premium' and u.subscription_status == 'active' %}selected{% endif %}>Premium</option>
+                                </select>
+                                <button class="btn" onclick="updatePlan({{ u.telegram_id }})" style="padding:3px 8px; font-size:0.78em;">Aplicar</button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not users %}
+                    <tr>
+                        <td colspan="7" style="color:#475569; text-align:center; padding:20px;">
+                            No hay usuarios registrados
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <div id="tab-consultations" class="tab-content">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Usuario</th>
+                        <th>Tipo</th>
+                        <th>Consulta</th>
+                        <th>Modelo</th>
+                        <th>Tiempo</th>
+                        <th>Feedback</th>
+                        <th>Fecha</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in consultations %}
+                    <tr>
+                        <td>{{ c.id }}</td>
+                        <td>
+                            <span class="user-name">{{ c.first_name or 'N/A' }}</span><br>
+                            <span class="user-username">@{{ c.username or 'N/A' }}</span>
+                        </td>
+                        <td>
+                            {% if c.is_deepening %}
+                                <span class="badge purple">Profund.</span>
+                            {% elif c.query_type == 'voice' %}
+                                <span class="badge amber">Voz</span>
+                            {% else %}
+                                <span class="badge blue">Texto</span>
+                            {% endif %}
+                        </td>
+                        <td><div class="query-text" title="{{ c.query_text }}">{{ c.query_text[:80] }}</div></td>
+                        <td style="font-size:0.8em; color:#475569;">{{ (c.llm_model or '')| replace('openai/', '') }}</td>
+                        <td>{{ '%.1f' % (c.response_time_seconds or 0) }}s</td>
+                        <td>
+                            {% if c.user_feedback %}
+                                {% if 'Mejor' in c.user_feedback or 'Reforz' in c.user_feedback %}
+                                    <span class="feedback-tag feedback-positive" title="{{ c.user_feedback }}">+</span>
+                                {% elif 'incorrect' in c.user_feedback or 'No me' in c.user_feedback %}
+                                    <span class="feedback-tag feedback-negative" title="{{ c.user_feedback }}">-</span>
+                                {% else %}
+                                    <span class="feedback-tag feedback-neutral" title="{{ c.user_feedback }}">~</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td style="white-space:nowrap;">{{ (c.created_at or '')[:16] }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% if not consultations %}
+                    <tr>
+                        <td colspan="8" style="color:#475569; text-align:center; padding:20px;">
+                            No hay consultas registradas
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.getElementById('tab-' + tab).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        async function updatePlan(telegramId) {
+            const select = document.getElementById('plan-' + telegramId);
+            const plan = select.value;
+
+            const res = await apiCall('/api/bot/users/' + telegramId + '/plan', 'PUT', { plan: plan });
+            if (res.ok) {
+                showToast('Plan actualizado: ' + plan);
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast(res.error || 'Error actualizando plan', 'error');
+            }
+        }
+    </script>
+{% endblock %}

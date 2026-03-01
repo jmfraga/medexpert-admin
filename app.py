@@ -664,6 +664,37 @@ AVAILABLE_MODELS = {
 }
 
 
+# ─────────────────────────────────────────────
+# Telegram Bot Dashboard
+# ─────────────────────────────────────────────
+
+@app.get("/bot", response_class=HTMLResponse)
+async def bot_dashboard(request: Request):
+    stats = db.get_bot_stats()
+    users = db.get_all_bot_users()
+    consultations = db.get_bot_recent_consultations(limit=50)
+    return templates.TemplateResponse("bot.html", {
+        "request": request,
+        "active_page": "bot",
+        "stats": stats,
+        "users": users,
+        "consultations": consultations,
+    })
+
+
+@app.put("/api/bot/users/{telegram_id}/plan")
+async def update_bot_user_plan(telegram_id: int, request: Request):
+    data = await request.json()
+    plan = data.get("plan", "free")
+
+    if plan == "free":
+        db.cancel_bot_user_subscription(telegram_id)
+    else:
+        db.update_bot_user_subscription(telegram_id, plan, "active")
+
+    return JSONResponse({"ok": True, "plan": plan})
+
+
 @app.get("/config", response_class=HTMLResponse)
 async def config_page(request: Request):
     api_keys = db.get_api_keys()
