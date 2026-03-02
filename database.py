@@ -129,6 +129,7 @@ def init_db():
             expert_id INTEGER NOT NULL,
             term TEXT NOT NULL,
             category TEXT DEFAULT '',
+            synonyms TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (expert_id) REFERENCES experts(id) ON DELETE CASCADE,
             UNIQUE(expert_id, term)
@@ -137,14 +138,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER,
+            telegram_id INTEGER,
             expert_slug TEXT DEFAULT '',
-            ticket_type TEXT NOT NULL CHECK(ticket_type IN ('transcription', 'bug', 'feature')),
+            ticket_type TEXT NOT NULL CHECK(ticket_type IN ('transcription', 'bug', 'feature', 'support')),
             status TEXT DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'resolved', 'rejected')),
             title TEXT NOT NULL,
             description TEXT DEFAULT '',
             original_text TEXT DEFAULT '',
             suggested_text TEXT DEFAULT '',
             admin_notes TEXT DEFAULT '',
+            admin_response TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now')),
             resolved_at TEXT,
             FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
@@ -236,6 +239,58 @@ def init_db():
             conn.commit()
         except sqlite3.OperationalError:
             pass
+    try:
+        conn.execute("ALTER TABLE glossary_terms ADD COLUMN synonyms TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    for col, defn in [
+        ("telegram_id", "INTEGER"),
+        ("admin_response", "TEXT DEFAULT ''"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} {defn}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+    # Migrate tickets table to add 'support' to CHECK constraint
+    try:
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='tickets'").fetchone()
+        if row and "'support'" not in row[0]:
+            conn.execute("ALTER TABLE tickets RENAME TO tickets_old")
+            conn.execute("""
+                CREATE TABLE tickets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id INTEGER,
+                    telegram_id INTEGER,
+                    expert_slug TEXT DEFAULT '',
+                    ticket_type TEXT NOT NULL CHECK(ticket_type IN ('transcription', 'bug', 'feature', 'support')),
+                    status TEXT DEFAULT 'open' CHECK(status IN ('open', 'in_progress', 'resolved', 'rejected')),
+                    title TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    original_text TEXT DEFAULT '',
+                    suggested_text TEXT DEFAULT '',
+                    admin_notes TEXT DEFAULT '',
+                    admin_response TEXT DEFAULT '',
+                    created_at TEXT DEFAULT (datetime('now')),
+                    resolved_at TEXT,
+                    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
+                )
+            """)
+            conn.execute("""
+                INSERT INTO tickets (id, client_id, expert_slug, ticket_type, status,
+                    title, description, original_text, suggested_text, admin_notes,
+                    created_at, resolved_at)
+                SELECT id, client_id, expert_slug, ticket_type, status,
+                    title, description, original_text, suggested_text, admin_notes,
+                    created_at, resolved_at
+                FROM tickets_old
+            """)
+            conn.execute("DROP TABLE tickets_old")
+            conn.commit()
+            console.print("[green]Tickets table migrated (added support type)[/green]")
+    except Exception as e:
+        console.print(f"[yellow]Tickets migration note: {e}[/yellow]")
     conn.close()
     console.print("[green]Database initialized[/green]")
 
@@ -616,12 +671,12 @@ def get_distribution_log(client_id: int = None, limit: int = 50) -> list[dict]:
 # Glossary Terms
 # ─────────────────────────────────────────────
 
-def create_glossary_term(expert_id: int, term: str, category: str = "") -> int:
+def create_glossary_term(expert_id: int, term: str, category: str = "", synonyms: str = "") -> int:
     conn = get_connection()
     try:
         cursor = conn.execute(
-            "INSERT OR IGNORE INTO glossary_terms (expert_id, term, category) VALUES (?, ?, ?)",
-            (expert_id, term, category),
+            "INSERT OR IGNORE INTO glossary_terms (expert_id, term, category, synonyms) VALUES (?, ?, ?, ?)",
+            (expert_id, term, category, synonyms),
         )
         conn.commit()
         return cursor.lastrowid
@@ -641,7 +696,7 @@ def get_glossary_terms_for_expert(expert_id: int) -> list[dict]:
 
 def update_glossary_term(term_id: int, **kwargs):
     conn = get_connection()
-    allowed = {"term", "category"}
+    allowed = {"term", "category", "synonyms"}
     updates, params = [], []
     for key, val in kwargs.items():
         if key in allowed and val is not None:
@@ -671,9 +726,10 @@ def bulk_create_glossary_terms(expert_id: int, terms: list[dict]) -> int:
             if not term:
                 continue
             category = t.get("category", "").strip()
+            synonyms = t.get("synonyms", "").strip()
             cursor = conn.execute(
-                "INSERT OR IGNORE INTO glossary_terms (expert_id, term, category) VALUES (?, ?, ?)",
-                (expert_id, term, category),
+                "INSERT OR IGNORE INTO glossary_terms (expert_id, term, category, synonyms) VALUES (?, ?, ?, ?)",
+                (expert_id, term, category, synonyms),
             )
             count += cursor.rowcount
         conn.commit()
@@ -708,16 +764,17 @@ def get_glossary_term_count(expert_id: int) -> int:
 # Tickets
 # ─────────────────────────────────────────────
 
-def create_ticket(client_id: int, ticket_type: str, title: str,
+def create_ticket(client_id: int = None, ticket_type: str = "support", title: str = "",
                   description: str = "", expert_slug: str = "",
-                  original_text: str = "", suggested_text: str = "") -> int:
+                  original_text: str = "", suggested_text: str = "",
+                  telegram_id: int = None) -> int:
     conn = get_connection()
     try:
         cursor = conn.execute("""
-            INSERT INTO tickets (client_id, ticket_type, title, description,
+            INSERT INTO tickets (client_id, telegram_id, ticket_type, title, description,
                                  expert_slug, original_text, suggested_text)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (client_id, ticket_type, title, description,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (client_id, telegram_id, ticket_type, title, description,
               expert_slug, original_text, suggested_text))
         conn.commit()
         return cursor.lastrowid
@@ -750,7 +807,7 @@ def get_ticket_by_id(ticket_id: int) -> dict | None:
 
 def update_ticket(ticket_id: int, **kwargs):
     conn = get_connection()
-    allowed = {"status", "admin_notes", "resolved_at"}
+    allowed = {"status", "admin_notes", "admin_response", "resolved_at"}
     updates, params = [], []
     for key, val in kwargs.items():
         if key in allowed and val is not None:

@@ -53,10 +53,15 @@ else
     echo "[3/4] Skipping ChromaDB sync (--no-chromadb)"
 fi
 
-# 4. Sync DB and restart bot
+# 4. Restart services (DB stays on M1 — production data is authoritative)
 echo ""
-echo "[4/4] Syncing DB and restarting bot..."
-scp -q "$LOCAL_PATH/data/medexpert_admin.db" "$M1_HOST:$M1_PATH/data/medexpert_admin.db"
+echo "[4/4] Restarting services..."
+
+# Restart admin web server
+echo "Restarting admin..."
+ssh "$M1_HOST" "pkill -9 -f 'python app.py' 2>/dev/null; sleep 2; cd $M1_PATH && nohup ./venv/bin/python app.py --port 8081 > /tmp/admin.log 2>&1 &"
+sleep 3
+ssh "$M1_HOST" "ps aux | grep 'python app.py' | grep -v grep | awk '{print \"  Admin PID:\", \$2}' || echo '  WARNING: admin not running'"
 
 # Clean Python cache to force fresh bytecode
 ssh "$M1_HOST" "rm -rf $M1_PATH/__pycache__" 2>/dev/null || true

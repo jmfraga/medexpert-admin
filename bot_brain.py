@@ -62,13 +62,17 @@ async def transcribe_audio(audio_path: str, expert_slug: str = "") -> str | None
         return None
 
     try:
-        # Build initial_prompt from glossary if available
+        # Build initial_prompt from glossary (includes synonyms/brand names)
         initial_prompt = "Sesion clinica."
         if expert_slug:
             terms = db.get_glossary_terms_for_expert_by_slug(expert_slug)
             if terms:
-                term_text = ", ".join(t["term"] for t in terms[:100])
-                initial_prompt = f"Sesion clinica. {term_text}."
+                all_names = []
+                for t in terms[:100]:
+                    all_names.append(t["term"])
+                    if t.get("synonyms"):
+                        all_names.extend(s.strip() for s in t["synonyms"].split(",") if s.strip())
+                initial_prompt = f"Sesion clinica. {', '.join(all_names)}."
 
         language = os.getenv("BOT_WHISPER_LANGUAGE", "es")
         segments, info = model.transcribe(
@@ -84,6 +88,31 @@ async def transcribe_audio(audio_path: str, expert_slug: str = "") -> str | None
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
         return None
+
+
+def _expand_synonyms(text: str, expert_slug: str) -> str:
+    """Expand brand names to generic names (and vice versa) in query text.
+    E.g. if user says 'Keytruda', also search for 'pembrolizumab'."""
+    terms = db.get_glossary_terms_for_expert_by_slug(expert_slug)
+    if not terms:
+        return text
+    text_lower = text.lower()
+    expansions = []
+    for t in terms:
+        synonyms_str = t.get("synonyms", "")
+        if not synonyms_str:
+            continue
+        syn_list = [s.strip() for s in synonyms_str.split(",") if s.strip()]
+        all_names = [t["term"]] + syn_list
+        for name in all_names:
+            if name.lower() in text_lower:
+                # Add all other names as expansions
+                for other in all_names:
+                    if other.lower() != name.lower() and other.lower() not in text_lower:
+                        expansions.append(other)
+    if expansions:
+        return f"{text} ({', '.join(expansions)})"
+    return text
 
 
 class BotBrain:
@@ -136,12 +165,15 @@ class BotBrain:
         system_prompt = (expert["system_prompt"] if expert and expert.get("system_prompt")
                          else DEFAULT_SYSTEM_PROMPT)
 
+        # Expand brand names → generic names (e.g. Keytruda → pembrolizumab)
+        expanded_text = _expand_synonyms(text, expert_slug)
+
         # RAG search — dual-language: Spanish (original) + English (translated)
         # NCCN/ESMO guidelines are in English, IMSS in Spanish.
         # Without bilingual search, cosine similarity always favors same-language chunks.
         rag = get_rag_for_expert(expert_slug)
-        rag_es = rag.search_detailed(text, n_results=15)
-        english_query = _translate_query_to_english(text)
+        rag_es = rag.search_detailed(expanded_text, n_results=15)
+        english_query = _translate_query_to_english(expanded_text)
         rag_en = rag.search_detailed(english_query, n_results=15) if english_query else []
         logger.info(f"RAG: {len(rag_es)} ES hits + {len(rag_en)} EN hits")
 
@@ -267,10 +299,11 @@ class BotBrain:
             deepen_model = "openai/gpt-oss-120b"
             max_tokens = 2000
 
-        # Re-do RAG search for fresh context
+        # Re-do RAG search for fresh context (with synonym expansion)
+        expanded_query = _expand_synonyms(original_query, expert_slug)
         rag = get_rag_for_expert(expert_slug)
-        rag_es = rag.search_detailed(original_query, n_results=15)
-        english_query = _translate_query_to_english(original_query)
+        rag_es = rag.search_detailed(expanded_query, n_results=15)
+        english_query = _translate_query_to_english(expanded_query)
         rag_en = rag.search_detailed(english_query, n_results=15) if english_query else []
 
         seen = set()

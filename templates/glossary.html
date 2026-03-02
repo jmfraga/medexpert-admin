@@ -48,13 +48,14 @@
             border-radius: 8px;
             padding: 8px 16px;
             display: grid;
-            grid-template-columns: 1fr auto auto;
+            grid-template-columns: 1fr 1fr auto auto;
             gap: 12px;
             align-items: center;
             font-size: 0.88em;
         }
 
         .term-name { color: #e0e6ed; font-weight: 500; }
+        .term-synonyms { color: #94a3b8; font-size: 0.82em; font-style: italic; }
         .term-category { color: #64748b; font-size: 0.82em; }
 
         .badge { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.72em; font-weight: 600; }
@@ -129,9 +130,9 @@
         <div id="bulkAddSection" style="display:none; margin-bottom:20px;">
             <div style="background:#111827; border:1px solid #1e2640; border-radius:8px; padding:16px;">
                 <div style="font-size:0.85em; color:#94a3b8; margin-bottom:8px;">
-                    Un termino por linea. Formato: <code style="color:#f59e0b;">termino</code> o <code style="color:#f59e0b;">termino | categoria</code>
+                    Un termino por linea. Formato: <code style="color:#f59e0b;">termino | categoria | sinonimos</code>
                 </div>
-                <textarea class="bulk-input" id="bulkTerms" rows="6" placeholder="cisplatino | farmaco&#10;carboplatino | farmaco&#10;adenocarcinoma | diagnostico&#10;mastectomia | procedimiento"></textarea>
+                <textarea class="bulk-input" id="bulkTerms" rows="6" placeholder="pembrolizumab | farmaco | Keytruda, MK-3475&#10;trastuzumab | farmaco | Herceptin&#10;carboplatino | farmaco | Paraplatin&#10;adenocarcinoma | diagnostico"></textarea>
                 <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
                     <button class="btn" onclick="toggleBulkAdd()">Cancelar</button>
                     <button class="btn primary" onclick="importBulk()">Importar</button>
@@ -149,9 +150,10 @@
                 {% for t in cat_terms %}
                 <div class="term-row">
                     <div class="term-name">{{ t.term }}</div>
+                    <div class="term-synonyms">{{ t.synonyms if t.synonyms else '' }}</div>
                     <span class="badge blue">{{ t.category or 'General' }}</span>
                     <div style="display:flex; gap:4px;">
-                        <button class="btn" onclick="editTerm({{ t.id }}, '{{ t.term|e }}', '{{ t.category|e }}')">Editar</button>
+                        <button class="btn" onclick="editTerm({{ t.id }}, '{{ t.term|e }}', '{{ t.category|e }}', '{{ t.synonyms|e if t.synonyms else '' }}')">Editar</button>
                         <button class="btn danger" onclick="deleteTerm({{ t.id }}, '{{ t.term|e }}')">X</button>
                     </div>
                 </div>
@@ -175,6 +177,10 @@
                 <input type="text" id="termInput" placeholder="cisplatino">
             </div>
             <div class="form-group">
+                <label>Sinonimos / Marcas comerciales</label>
+                <input type="text" id="synonymsInput" placeholder="Keytruda, MK-3475 (separados por coma)">
+            </div>
+            <div class="form-group">
                 <label>Categoria</label>
                 <input type="text" id="categoryInput" placeholder="farmaco, diagnostico, procedimiento, marcador...">
             </div>
@@ -194,15 +200,17 @@
             document.getElementById('modalTitle').textContent = 'Agregar termino';
             document.getElementById('editTermId').value = '';
             document.getElementById('termInput').value = '';
+            document.getElementById('synonymsInput').value = '';
             document.getElementById('categoryInput').value = '';
             document.getElementById('termModal').classList.add('show');
             document.getElementById('termInput').focus();
         }
 
-        function editTerm(id, term, category) {
+        function editTerm(id, term, category, synonyms) {
             document.getElementById('modalTitle').textContent = 'Editar termino';
             document.getElementById('editTermId').value = id;
             document.getElementById('termInput').value = term;
+            document.getElementById('synonymsInput').value = synonyms || '';
             document.getElementById('categoryInput').value = category;
             document.getElementById('termModal').classList.add('show');
             document.getElementById('termInput').focus();
@@ -214,6 +222,7 @@
 
         async function saveTerm() {
             const term = document.getElementById('termInput').value.trim();
+            const synonyms = document.getElementById('synonymsInput').value.trim();
             const category = document.getElementById('categoryInput').value.trim();
             const editId = document.getElementById('editTermId').value;
 
@@ -221,9 +230,9 @@
 
             let data;
             if (editId) {
-                data = await apiCall(`/api/glossary/${editId}`, 'PUT', { term, category });
+                data = await apiCall(`/api/glossary/${editId}`, 'PUT', { term, synonyms, category });
             } else {
-                data = await apiCall('/api/glossary', 'POST', { expert_id: EXPERT_ID, term, category });
+                data = await apiCall('/api/glossary', 'POST', { expert_id: EXPERT_ID, term, synonyms, category });
             }
 
             if (data.ok) {
@@ -254,7 +263,7 @@
             const lines = text.split('\n').filter(l => l.trim());
             const terms = lines.map(line => {
                 const parts = line.split('|').map(p => p.trim());
-                return { term: parts[0], category: parts[1] || '' };
+                return { term: parts[0], category: parts[1] || '', synonyms: parts[2] || '' };
             }).filter(t => t.term);
 
             if (!terms.length) { showToast('No se encontraron terminos validos', 'error'); return; }

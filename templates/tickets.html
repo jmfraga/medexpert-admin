@@ -201,6 +201,7 @@
                 <div class="filter-group">
                     <span class="filter-group-label">Tipo:</span>
                     <a href="/tickets{% if current_status %}?status={{ current_status }}{% endif %}" class="filter-btn {% if not current_type %}active{% endif %}">Todos</a>
+                    <a href="/tickets?type=support{% if current_status %}&status={{ current_status }}{% endif %}" class="filter-btn {% if current_type == 'support' %}active{% endif %}">Soporte</a>
                     <a href="/tickets?type=transcription{% if current_status %}&status={{ current_status }}{% endif %}" class="filter-btn {% if current_type == 'transcription' %}active{% endif %}">Transcripcion</a>
                     <a href="/tickets?type=bug{% if current_status %}&status={{ current_status }}{% endif %}" class="filter-btn {% if current_type == 'bug' %}active{% endif %}">Bug</a>
                     <a href="/tickets?type=feature{% if current_status %}&status={{ current_status }}{% endif %}" class="filter-btn {% if current_type == 'feature' %}active{% endif %}">Feature</a>
@@ -249,7 +250,11 @@
                     </div>
 
                     <div class="ticket-meta">
+                        {% if t.telegram_id %}
+                        <span>Telegram: {{ t.telegram_username or t.telegram_id }}</span>
+                        {% else %}
                         <span>Cliente: {{ t.client_name or 'Desconocido' }}</span>
+                        {% endif %}
                         <span>Experto: {{ t.expert_slug or '-' }}</span>
                         <span>{{ t.created_at[:16] if t.created_at else '-' }}</span>
                         {% if t.resolved_at %}
@@ -281,6 +286,13 @@
                     </div>
                     {% endif %}
 
+                    {% if t.admin_response %}
+                    <div class="ticket-notes">
+                        <div class="ticket-notes-label">Respuesta al usuario</div>
+                        {{ t.admin_response }}
+                    </div>
+                    {% endif %}
+
                     <div class="ticket-actions">
                         {% if t.status != 'resolved' %}
                         <button class="btn success" onclick="updateTicketStatus({{ t.id }}, 'resolved')">Resolver</button>
@@ -290,6 +302,9 @@
                         {% endif %}
                         {% if t.status != 'rejected' %}
                         <button class="btn danger" onclick="updateTicketStatus({{ t.id }}, 'rejected')">Rechazar</button>
+                        {% endif %}
+                        {% if t.telegram_id and t.status != 'resolved' %}
+                        <button class="btn primary" onclick="openRespondModal({{ t.id }})">Responder</button>
                         {% endif %}
                         {% if t.ticket_type == 'transcription' %}
                         <button class="btn warning" onclick="applyToGlossary({{ t.id }})">Agregar al glosario</button>
@@ -326,6 +341,25 @@
             <div class="modal-actions">
                 <button class="btn" onclick="closeModal()">Cancelar</button>
                 <button class="btn primary" onclick="saveNotes()">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Respond to user modal -->
+    <div class="modal-overlay" id="respondModal">
+        <div class="modal">
+            <h3>Responder al usuario</h3>
+            <p style="font-size:0.82em; color:#64748b; margin-bottom:12px;">
+                La respuesta se enviara por Telegram al usuario y el ticket se marcara como resuelto.
+            </p>
+            <input type="hidden" id="respondTicketId" value="">
+            <div class="form-group">
+                <label>Respuesta</label>
+                <textarea id="respondInput" rows="5" placeholder="Escribe tu respuesta al usuario..."></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="closeRespondModal()">Cancelar</button>
+                <button class="btn primary" onclick="sendResponse()">Enviar respuesta</button>
             </div>
         </div>
     </div>
@@ -387,9 +421,36 @@
             }
         }
 
-        // Escape key to close modal
+        function openRespondModal(ticketId) {
+            document.getElementById('respondTicketId').value = ticketId;
+            document.getElementById('respondInput').value = '';
+            document.getElementById('respondModal').classList.add('show');
+            document.getElementById('respondInput').focus();
+        }
+
+        function closeRespondModal() {
+            document.getElementById('respondModal').classList.remove('show');
+        }
+
+        async function sendResponse() {
+            const ticketId = document.getElementById('respondTicketId').value;
+            const response = document.getElementById('respondInput').value.trim();
+
+            if (!response) { showToast('Escribe una respuesta', 'error'); return; }
+
+            const data = await apiCall(`/api/tickets/${ticketId}/respond`, 'POST', { response });
+            if (data.ok) {
+                showToast(data.warning || 'Respuesta enviada por Telegram');
+                closeRespondModal();
+                location.reload();
+            } else {
+                showToast(data.error || 'Error al enviar', 'error');
+            }
+        }
+
+        // Escape key to close modals
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeModal();
+            if (e.key === 'Escape') { closeModal(); closeRespondModal(); }
         });
     </script>
 {% endblock %}

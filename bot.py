@@ -218,14 +218,26 @@ async def cmd_terminos(update, context):
 
 
 async def cmd_soporte(update, context):
-    """Handle /soporte command."""
+    """Handle /soporte command — ask user to describe their issue."""
+    context.user_data["awaiting_support"] = True
     await update.message.reply_text(
         "<b>Soporte MedExpert</b>\n\n"
-        "Para dudas, reportes o sugerencias:\n"
-        "  Email: jmfraga@emergencias.com.mx\n\n"
-        "Describe tu problema y te responderemos lo antes posible.",
+        "Describe tu problema, duda o sugerencia en un mensaje y lo enviaremos a nuestro equipo.\n\n"
+        "Escribe /cancelar para cancelar.",
         parse_mode="HTML",
     )
+
+
+async def cmd_cancelar(update, context):
+    """Handle /cancelar — cancel any pending action."""
+    cancelled = False
+    for key in ("awaiting_support", "awaiting_email"):
+        if context.user_data.pop(key, None):
+            cancelled = True
+    if cancelled:
+        await update.message.reply_text("Accion cancelada.")
+    else:
+        await update.message.reply_text("No hay ninguna accion pendiente.")
 
 
 async def cmd_suscribir(update, context):
@@ -738,6 +750,25 @@ async def handle_text(update, context):
             )
         return
 
+    # Intercept support ticket creation
+    if context.user_data.get("awaiting_support"):
+        context.user_data.pop("awaiting_support", None)
+        ticket_id = db.create_ticket(
+            telegram_id=user.id,
+            ticket_type="support",
+            title=text[:80],
+            description=text,
+            expert_slug=specialty,
+        )
+        logger.info(f"Support ticket #{ticket_id} created by {user.id}")
+        await update.message.reply_text(
+            f"<b>Ticket #{ticket_id} creado</b>\n\n"
+            "Tu mensaje fue enviado a nuestro equipo de soporte. "
+            "Te notificaremos cuando tengamos una respuesta.",
+            parse_mode="HTML",
+        )
+        return
+
     # Check limits
     if not db.can_bot_user_query(user.id, specialty, FREE_QUERY_LIMIT):
         await _show_limit_reached(update)
@@ -975,12 +1006,13 @@ async def handle_deepen_callback(update, context):
         # Send deepened response
         await _send_long_message_from_callback(query, main_text)
 
-        # Send footer with PDF button (no deepen button on deepened response)
+        # Send footer with PDF + feedback buttons (no deepen button on deepened response)
         if footer:
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            keyboard = [[InlineKeyboardButton(
-                "Exportar PDF", callback_data=f"pdf_{deepen_id}"
-            )]]
+            keyboard = [
+                [InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{deepen_id}")],
+                [InlineKeyboardButton("¿Te sirvió?", callback_data=f"eval_{deepen_id}")],
+            ]
             await query.message.reply_text(
                 footer, parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(keyboard),
@@ -1193,6 +1225,7 @@ def main():
     app.add_handler(CommandHandler("estado", cmd_estado))
     app.add_handler(CommandHandler("terminos", cmd_terminos))
     app.add_handler(CommandHandler("soporte", cmd_soporte))
+    app.add_handler(CommandHandler("cancelar", cmd_cancelar))
     app.add_handler(CommandHandler("suscribir", cmd_suscribir))
 
     # Message handlers (voice and text)
@@ -1212,6 +1245,21 @@ def main():
 
     # Error handler
     app.add_error_handler(handle_error)
+
+    # Set bot commands menu (visible when user types "/")
+    async def post_init(application):
+        from telegram import BotCommand
+        await application.bot.set_my_commands([
+            BotCommand("start", "Iniciar el bot"),
+            BotCommand("ayuda", "Ver comandos disponibles"),
+            BotCommand("estado", "Ver tu plan y consultas"),
+            BotCommand("suscribir", "Ver planes de suscripcion"),
+            BotCommand("soporte", "Contactar soporte"),
+            BotCommand("terminos", "Terminos y condiciones"),
+            BotCommand("cancelar", "Cancelar accion en curso"),
+        ])
+        logger.info("Bot commands menu set")
+    app.post_init = post_init
 
     # Start
     logger.info(f"MedExpert Bot starting (specialty: {specialty}, polling mode)")

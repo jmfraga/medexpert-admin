@@ -259,6 +259,10 @@
                                     <option value="premium" {% if u.subscription_plan == 'premium' and u.subscription_status == 'active' %}selected{% endif %}>Premium</option>
                                 </select>
                                 <button class="btn" onclick="updatePlan({{ u.telegram_id }})" style="padding:3px 8px; font-size:0.78em;">Aplicar</button>
+                                {% if u.subscription_status == 'active' %}
+                                <button class="btn danger" onclick="cancelPlan({{ u.telegram_id }}, '{{ u.first_name|e }}')" style="padding:3px 8px; font-size:0.78em;">Cancelar</button>
+                                {% endif %}
+                                <button class="btn" onclick="openUserDetail({{ u.telegram_id }})" style="padding:3px 8px; font-size:0.78em;">Info</button>
                             </div>
                         </td>
                     </tr>
@@ -333,6 +337,33 @@
             </table>
         </div>
     </div>
+    <!-- User detail modal -->
+    <div class="modal-overlay" id="userDetailModal">
+        <div class="modal" style="max-width:450px;">
+            <h3 id="userDetailTitle">Detalle de usuario</h3>
+            <div id="userDetailContent" style="font-size:0.85em; color:#94a3b8; line-height:1.8;"></div>
+            <div class="modal-actions" style="margin-top:16px;">
+                <button class="btn" onclick="closeUserDetail()">Cerrar</button>
+                <button class="btn primary" id="notifyUserBtn" style="display:none;" onclick="notifyUser()">Enviar mensaje</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notify user modal -->
+    <div class="modal-overlay" id="notifyModal">
+        <div class="modal" style="max-width:450px;">
+            <h3>Enviar mensaje al usuario</h3>
+            <input type="hidden" id="notifyTelegramId" value="">
+            <div class="form-group">
+                <label>Mensaje</label>
+                <textarea id="notifyInput" rows="4" placeholder="Escribe un mensaje para el usuario..."></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn" onclick="document.getElementById('notifyModal').classList.remove('show')">Cancelar</button>
+                <button class="btn primary" onclick="sendNotification()">Enviar por Telegram</button>
+            </div>
+        </div>
+    </div>
 {% endblock %}
 
 {% block scripts %}
@@ -344,16 +375,94 @@
             event.target.classList.add('active');
         }
 
+        // User data for detail modal
+        const usersData = {
+            {% for u in users %}
+            {{ u.telegram_id }}: {
+                name: "{{ u.first_name|e }} {{ u.last_name|default('', true)|e }}",
+                username: "{{ u.username|default('', true)|e }}",
+                email: "{{ u.email|default('', true)|e }}",
+                plan: "{{ u.subscription_plan|default('', true)|e }}",
+                status: "{{ u.subscription_status|default('', true)|e }}",
+                started: "{{ u.subscription_started_at|default('', true)|e }}",
+                expires: "{{ u.subscription_expires_at|default('', true)|e }}",
+                stripe: "{{ u.stripe_customer_id|default('', true)|e }}",
+                queries: {{ u.query_count|default(0, true) }},
+                referral: "{{ u.referral_code|default('', true)|e }}",
+                created: "{{ (u.created_at|default('', true))[:16] }}",
+            },
+            {% endfor %}
+        };
+
         async function updatePlan(telegramId) {
             const select = document.getElementById('plan-' + telegramId);
             const plan = select.value;
+            const notify = confirm('Notificar al usuario por Telegram del cambio de plan?');
 
-            const res = await apiCall('/api/bot/users/' + telegramId + '/plan', 'PUT', { plan: plan });
+            const res = await apiCall('/api/bot/users/' + telegramId + '/plan', 'PUT', { plan, notify });
             if (res.ok) {
                 showToast('Plan actualizado: ' + plan);
                 setTimeout(() => location.reload(), 1000);
             } else {
                 showToast(res.error || 'Error actualizando plan', 'error');
+            }
+        }
+
+        async function cancelPlan(telegramId, name) {
+            if (!confirm(`Cancelar la suscripcion de ${name}?`)) return;
+            const notify = confirm('Notificar al usuario por Telegram?');
+
+            const res = await apiCall('/api/bot/users/' + telegramId + '/plan', 'PUT', { plan: 'free', notify });
+            if (res.ok) {
+                showToast('Suscripcion cancelada');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        function openUserDetail(telegramId) {
+            const u = usersData[telegramId];
+            if (!u) return;
+            document.getElementById('userDetailTitle').textContent = u.name;
+            document.getElementById('userDetailContent').innerHTML =
+                '<b>Telegram ID:</b> ' + telegramId + '<br>' +
+                '<b>Username:</b> @' + (u.username || 'N/A') + '<br>' +
+                '<b>Email:</b> ' + (u.email || '-') + '<br>' +
+                '<b>Plan:</b> ' + (u.status === 'active' ? u.plan : 'Free') + '<br>' +
+                '<b>Estado:</b> ' + (u.status || 'sin suscripcion') + '<br>' +
+                (u.started ? '<b>Inicio:</b> ' + u.started.substring(0,16) + '<br>' : '') +
+                (u.expires ? '<b>Expira:</b> ' + u.expires.substring(0,16) + '<br>' : '') +
+                (u.stripe ? '<b>Stripe:</b> ' + u.stripe + '<br>' : '') +
+                '<b>Consultas:</b> ' + u.queries + '<br>' +
+                (u.referral ? '<b>Referido:</b> ' + u.referral + '<br>' : '') +
+                '<b>Registro:</b> ' + u.created;
+            document.getElementById('notifyUserBtn').style.display = 'inline-block';
+            document.getElementById('notifyUserBtn').onclick = function() {
+                closeUserDetail();
+                document.getElementById('notifyTelegramId').value = telegramId;
+                document.getElementById('notifyInput').value = '';
+                document.getElementById('notifyModal').classList.add('show');
+                document.getElementById('notifyInput').focus();
+            };
+            document.getElementById('userDetailModal').classList.add('show');
+        }
+
+        function closeUserDetail() {
+            document.getElementById('userDetailModal').classList.remove('show');
+        }
+
+        async function sendNotification() {
+            const telegramId = document.getElementById('notifyTelegramId').value;
+            const message = document.getElementById('notifyInput').value.trim();
+            if (!message) { showToast('Escribe un mensaje', 'error'); return; }
+
+            const res = await apiCall('/api/bot/users/' + telegramId + '/notify', 'POST', { message });
+            if (res.ok) {
+                showToast('Mensaje enviado');
+                document.getElementById('notifyModal').classList.remove('show');
+            } else {
+                showToast(res.error || 'Error enviando', 'error');
             }
         }
     </script>

@@ -308,16 +308,17 @@ async def create_glossary_term(request: Request):
     expert_id = data.get("expert_id")
     term = data.get("term", "").strip()
     category = data.get("category", "").strip()
+    synonyms = data.get("synonyms", "").strip()
     if not expert_id or not term:
         return JSONResponse({"ok": False, "error": "expert_id and term required"})
-    term_id = db.create_glossary_term(expert_id, term, category)
+    term_id = db.create_glossary_term(expert_id, term, category, synonyms)
     return JSONResponse({"ok": True, "id": term_id})
 
 
 @app.put("/api/glossary/{term_id}")
 async def update_glossary_term_route(term_id: int, request: Request):
     data = await request.json()
-    db.update_glossary_term(term_id, term=data.get("term"), category=data.get("category"))
+    db.update_glossary_term(term_id, term=data.get("term"), category=data.get("category"), synonyms=data.get("synonyms"))
     return JSONResponse({"ok": True})
 
 
@@ -470,8 +471,11 @@ async def tickets_page(request: Request):
     type_filter = request.query_params.get("type")
     tickets = db.get_all_tickets(status=status_filter, ticket_type=type_filter)
     stats = db.get_ticket_stats()
-    # Enrich with client name
+    # Enrich with client name or Telegram username
     for t in tickets:
+        if t.get("telegram_id"):
+            bot_user = db.get_bot_user(t["telegram_id"])
+            t["telegram_username"] = (bot_user.get("username") or bot_user.get("first_name") or str(t["telegram_id"])) if bot_user else str(t["telegram_id"])
         if t.get("client_id"):
             client = db.get_client_by_id(t["client_id"])
             t["client_name"] = client["name"] if client else "Desconocido"
@@ -498,6 +502,47 @@ async def update_ticket_route(ticket_id: int, request: Request):
     if "admin_notes" in data:
         updates["admin_notes"] = data["admin_notes"]
     db.update_ticket(ticket_id, **updates)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/tickets/{ticket_id}/respond")
+async def respond_to_ticket(ticket_id: int, request: Request):
+    """Respond to a support ticket and notify user via Telegram."""
+    data = await request.json()
+    response_text = data.get("response", "").strip()
+    if not response_text:
+        return JSONResponse({"ok": False, "error": "Response text required"})
+
+    ticket = db.get_ticket_by_id(ticket_id)
+    if not ticket:
+        return JSONResponse({"ok": False, "error": "Ticket not found"})
+
+    # Save response and mark as resolved
+    db.update_ticket(ticket_id, admin_response=response_text, status="resolved",
+                     resolved_at=datetime.now().isoformat())
+
+    # Notify user via Telegram if we have their telegram_id
+    telegram_id = ticket.get("telegram_id")
+    if telegram_id:
+        try:
+            import httpx
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+            if bot_token:
+                msg = (
+                    f"<b>Respuesta a tu ticket #{ticket_id}</b>\n\n"
+                    f"{response_text}\n\n"
+                    "<i>— Equipo MedExpert</i>"
+                )
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": telegram_id, "text": msg, "parse_mode": "HTML"},
+                    )
+                logger.info(f"Ticket #{ticket_id} response sent to Telegram user {telegram_id}")
+        except Exception as e:
+            logger.error(f"Failed to notify Telegram user {telegram_id}: {e}")
+            return JSONResponse({"ok": True, "warning": "Response saved but Telegram notification failed"})
+
     return JSONResponse({"ok": True})
 
 
@@ -686,13 +731,61 @@ async def bot_dashboard(request: Request):
 async def update_bot_user_plan(telegram_id: int, request: Request):
     data = await request.json()
     plan = data.get("plan", "free")
+    notify = data.get("notify", False)
 
     if plan == "free":
         db.cancel_bot_user_subscription(telegram_id)
     else:
         db.update_bot_user_subscription(telegram_id, plan, "active")
 
+    # Notify user via Telegram
+    if notify:
+        try:
+            import httpx
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+            if bot_token:
+                if plan == "free":
+                    msg = "Tu suscripcion ha sido cancelada por el administrador.\n\nPuedes volver a suscribirte con /suscribir"
+                else:
+                    msg = f"Tu plan ha sido actualizado a: <b>{plan.capitalize()}</b>\n\nGracias por ser parte de MedExpert."
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": telegram_id, "text": msg, "parse_mode": "HTML"},
+                    )
+        except Exception as e:
+            logger.error(f"Failed to notify user {telegram_id}: {e}")
+
     return JSONResponse({"ok": True, "plan": plan})
+
+
+@app.post("/api/bot/users/{telegram_id}/notify")
+async def notify_bot_user(telegram_id: int, request: Request):
+    """Send a custom message to a Telegram user."""
+    data = await request.json()
+    message = data.get("message", "").strip()
+    if not message:
+        return JSONResponse({"ok": False, "error": "Message required"})
+
+    try:
+        import httpx
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if not bot_token:
+            return JSONResponse({"ok": False, "error": "Bot token not configured"})
+
+        msg = f"{message}\n\n<i>— Equipo MedExpert</i>"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": telegram_id, "text": msg, "parse_mode": "HTML"},
+            )
+        if resp.status_code == 200:
+            return JSONResponse({"ok": True})
+        else:
+            return JSONResponse({"ok": False, "error": f"Telegram API error: {resp.status_code}"})
+    except Exception as e:
+        logger.error(f"Failed to notify user {telegram_id}: {e}")
+        return JSONResponse({"ok": False, "error": str(e)})
 
 
 @app.get("/config", response_class=HTMLResponse)
