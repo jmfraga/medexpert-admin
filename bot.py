@@ -102,21 +102,40 @@ async def cmd_start(update, context):
 
     welcome = (
         f"<b>MedExpert {expert_name}</b>\n\n"
-        f"Hola Dr. {user.first_name}!\n\n"
-        f"Soy tu asistente clinico especializado en {expert_name.lower()}.\n\n"
-        f"<b>Tengo acceso a:</b>\n"
-        f"  {guidelines_count} guias clinicas ({chunks_count:,} fragmentos indexados)\n"
-        f"  Guidelines NCCN, ESMO, IMSS y mas\n\n"
-        f"<b>Como usar:</b>\n"
-        f"  Envia un audio con tu caso clinico\n"
-        f"  O escribe directamente tu consulta\n\n"
-        f"<b>IMPORTANTE:</b>\n"
-        f"  Anonimiza datos del paciente.\n"
-        f"  No nombres, telefonos ni direcciones.\n"
-        f"  Solo datos clinicos relevantes.\n\n"
+        f"¡Hola Dr. {user.first_name}!\n\n"
+        f"Soy tu asistente clínico especializado en {expert_name.lower()}, "
+        f"respaldado por {guidelines_count} guías clínicas internacionales "
+        f"(NCCN, ESMO, IMSS y más).\n\n"
+
+        f"<b>¿Cómo consultar?</b>\n"
+        f"  Envía un <b>audio de voz</b> o un <b>mensaje de texto</b> "
+        f"con tu caso clínico. Recibirás una respuesta basada en "
+        f"evidencia con referencias.\n\n"
+
+        f"<b>Recomendaciones para mejores resultados:</b>\n"
+        f"  Anonimiza siempre los datos del paciente\n"
+        f"  Si usas audio, habla claro y pausado\n"
+        f"  Usa nombres genéricos de medicamentos de preferencia\n"
+        f"  Incluye edad, género, estadio y comorbilidades\n"
+        f"  Sé específico en tu pregunta clínica\n\n"
+
+        f"<b>Después de cada respuesta puedes:</b>\n"
+        f"  <b>Profundizar</b> — análisis más detallado con IA avanzada\n"
+        f"  <b>Exportar PDF</b> — documento con citas para tu expediente\n"
+        f"  <b>Evaluar</b> — tu feedback nos ayuda a mejorar\n\n"
+
+        f"<b>Comandos disponibles:</b>\n"
+        f"  /ayuda — Guía completa y tips\n"
+        f"  /estado — Tu cuenta y consultas restantes\n"
+        f"  /suscribir — Planes y precios\n"
+        f"  /soporte — Reportar problemas o sugerencias\n"
+        f"  /terminos — Aviso legal\n"
+        f"  /cancelar — Cancelar acción en curso\n\n"
+
         f"Consultas gratis restantes: <b>{free_remaining}/{FREE_QUERY_LIMIT}</b>\n\n"
-        f"/ayuda - Mas informacion\n"
-        f"/estado - Estado de tu cuenta"
+
+        f"<i>Herramienta de apoyo clínico. No sustituye el criterio "
+        f"médico profesional.</i>"
     )
 
     await update.message.reply_text(welcome, parse_mode="HTML")
