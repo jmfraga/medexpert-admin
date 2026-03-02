@@ -217,7 +217,7 @@
                 <thead>
                     <tr>
                         <th>Usuario</th>
-                        <th>Especialidad</th>
+                        <th>Email</th>
                         <th>Plan</th>
                         <th>Consultas</th>
                         <th>Verificado</th>
@@ -232,7 +232,7 @@
                             <span class="user-name">{{ u.first_name }} {{ u.last_name or '' }}</span><br>
                             <span class="user-username">@{{ u.username or 'N/A' }}</span>
                         </td>
-                        <td>{{ u.specialty or 'N/A' }}</td>
+                        <td style="font-size:0.85em; color:#64748b;">{{ u.email or '-' }}</td>
                         <td>
                             {% if u.subscription_plan == 'premium' and u.subscription_status == 'active' %}
                                 <span class="badge purple">Premium</span>

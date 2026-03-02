@@ -222,8 +222,9 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
-    # Subscription fields on bot_users
+    # Bot user extra fields
     for col, defn in [
+        ("email", "TEXT DEFAULT NULL"),
         ("subscription_plan", "TEXT DEFAULT 'free'"),
         ("subscription_status", "TEXT DEFAULT NULL"),
         ("stripe_customer_id", "TEXT DEFAULT NULL"),
@@ -859,7 +860,7 @@ def get_bot_user(telegram_id: int) -> dict | None:
 def update_bot_user(telegram_id: int, **kwargs):
     conn = get_connection()
     allowed = {"username", "first_name", "last_name", "specialty",
-               "is_verified", "referred_by", "last_activity"}
+               "is_verified", "referred_by", "last_activity", "email"}
     updates, params = [], []
     for key, val in kwargs.items():
         if key in allowed and val is not None:

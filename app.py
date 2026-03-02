@@ -915,6 +915,86 @@ async def stripe_webhook(request: Request):
 
 
 # ─────────────────────────────────────────────
+# PayPal Webhook
+# ─────────────────────────────────────────────
+
+@app.post("/api/paypal/webhook")
+async def paypal_webhook(request: Request):
+    """Handle PayPal webhook events for subscription management."""
+    data = await request.json()
+    event_type = data.get("event_type", "")
+
+    if event_type == "BILLING.SUBSCRIPTION.ACTIVATED":
+        resource = data.get("resource", {})
+        custom_id = resource.get("custom_id", "")
+
+        if "_" in custom_id:
+            parts = custom_id.split("_")
+            telegram_id = int(parts[0])
+            plan = parts[1]
+            sub_id = resource.get("id", "")
+
+            db.update_bot_user_subscription(
+                telegram_id=telegram_id,
+                plan=plan,
+                status="active",
+                stripe_customer_id=f"paypal_{sub_id}",
+            )
+            logger.info(f"PayPal subscription activated: {telegram_id} -> {plan}")
+
+    elif event_type in ("BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.SUSPENDED"):
+        resource = data.get("resource", {})
+        custom_id = resource.get("custom_id", "")
+        if "_" in custom_id:
+            telegram_id = int(custom_id.split("_")[0])
+            db.cancel_bot_user_subscription(telegram_id)
+            logger.info(f"PayPal subscription cancelled: {telegram_id}")
+
+    return JSONResponse({"received": True})
+
+
+# ─────────────────────────────────────────────
+# Mercado Pago Webhook
+# ─────────────────────────────────────────────
+
+@app.post("/api/mercadopago/webhook")
+async def mercadopago_webhook(request: Request):
+    """Handle Mercado Pago IPN notifications."""
+    import mercadopago
+
+    mp_token = os.getenv("MP_ACCESS_TOKEN")
+    if not mp_token:
+        return JSONResponse({"error": "MP not configured"}, status_code=500)
+
+    data = await request.json()
+    action = data.get("action")
+    data_id = data.get("data", {}).get("id")
+
+    if action == "payment.created" and data_id:
+        sdk = mercadopago.SDK(mp_token)
+        payment = sdk.payment().get(data_id)
+        payment_info = payment.get("response", {})
+
+        status = payment_info.get("status")
+        external_ref = payment_info.get("external_reference", "")
+
+        if status == "approved" and "_" in external_ref:
+            parts = external_ref.split("_")
+            telegram_id = int(parts[0])
+            plan = parts[1]
+
+            db.update_bot_user_subscription(
+                telegram_id=telegram_id,
+                plan=plan,
+                status="active",
+                stripe_customer_id=f"mp_{data_id}",
+            )
+            logger.info(f"MP subscription activated: {telegram_id} -> {plan}")
+
+    return JSONResponse({"received": True})
+
+
+# ─────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────
 

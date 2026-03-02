@@ -30,6 +30,8 @@ faster-whisper==1.1.0
 
 # Payments
 stripe==11.4.1
+mercadopago==2.3.0
+paypal-server-sdk==2.2.0
 
 # Utilities
 python-dotenv==1.0.1

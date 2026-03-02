@@ -169,6 +169,7 @@ async def cmd_estado(update, context):
         f"<b>Estado de cuenta</b>\n\n"
         f"<b>Usuario:</b> {bot_user['first_name']} {bot_user.get('last_name', '')}\n"
         f"<b>Telegram:</b> @{bot_user.get('username', 'N/A')}\n"
+        f"<b>Email:</b> {bot_user.get('email') or 'No registrado'}\n"
         f"<b>Especialidad:</b> {specialty}\n"
         f"<b>Verificacion:</b> {verified_text}\n"
         f"<b>Codigo referido:</b> <code>{bot_user.get('referral_code', 'N/A')}</code>\n\n"
@@ -242,71 +243,138 @@ async def cmd_suscribir(update, context):
         )
         return
 
+    # Check if we have their email
+    bot_user = db.get_bot_user(user.id)
+    if not bot_user or not bot_user.get("email"):
+        context.user_data["awaiting_email"] = True
+        await update.message.reply_text(
+            "Antes de suscribirte, necesito tu email.\n"
+            "Sera usado para tu facturacion y notificaciones.\n\n"
+            "Escribe tu email:"
+        )
+        return
+
     keyboard = [
         [InlineKeyboardButton(
-            "Plan Basico - $14.99 USD/mes",
-            callback_data="subscribe_basic",
+            "Basico - $14.99 USD/mes",
+            callback_data="subscribe_basic_monthly",
         )],
         [InlineKeyboardButton(
-            "Plan Premium - $24.99 USD/mes",
-            callback_data="subscribe_premium",
+            "Basico - $149.90 USD/año (2 meses gratis)",
+            callback_data="subscribe_basic_annual",
+        )],
+        [InlineKeyboardButton(
+            "Premium - $24.99 USD/mes",
+            callback_data="subscribe_premium_monthly",
+        )],
+        [InlineKeyboardButton(
+            "Premium - $249.90 USD/año (2 meses gratis)",
+            callback_data="subscribe_premium_annual",
         )],
     ]
 
     await update.message.reply_text(
         "<b>Suscripciones MedExpert</b>\n\n"
-        "<b>Plan Basico - $14.99 USD/mes</b> (precio de lanzamiento)\n"
+        "<b>Plan Basico</b> (precio de lanzamiento)\n"
         "  Consultas ilimitadas\n"
         "  Profundizar con GPT-OSS 120B\n"
         "  Exportar a PDF\n"
         "  Cancela cuando quieras\n\n"
-        "<b>Plan Premium - $24.99 USD/mes</b> (precio de lanzamiento)\n"
+        "<b>Plan Premium</b> (precio de lanzamiento)\n"
         "  Todo lo del Plan Basico\n"
         "  Profundizar con Claude Opus 4.6\n"
         "  Respuestas de maxima calidad clinica\n"
         "  Soporte prioritario\n\n"
-        "Selecciona un plan:",
+        "Selecciona plan y periodo:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
+PLAN_PRICES = {
+    "basic_monthly": {"usd": 14.99, "mxn": 299, "label": "Basico Mensual", "period": "mes"},
+    "basic_annual": {"usd": 149.90, "mxn": 2990, "label": "Basico Anual", "period": "año"},
+    "premium_monthly": {"usd": 24.99, "mxn": 499, "label": "Premium Mensual", "period": "mes"},
+    "premium_annual": {"usd": 249.90, "mxn": 4990, "label": "Premium Anual", "period": "año"},
+}
+
+
 async def handle_subscribe_callback(update, context):
-    """Handle subscription plan selection — create Stripe checkout."""
+    """Handle subscription plan selection — show payment method options."""
+    query = update.callback_query
+    await query.answer()
+
+    # e.g. "subscribe_basic_monthly"
+    plan_key = query.data.replace("subscribe_", "")
+    price_info = PLAN_PRICES.get(plan_key)
+    if not price_info:
+        await query.message.reply_text("Plan no disponible.")
+        return
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [
+        [InlineKeyboardButton(
+            f"Tarjeta (Stripe) - ${price_info['usd']:.2f} USD",
+            callback_data=f"pay_stripe_{plan_key}",
+        )],
+        [InlineKeyboardButton(
+            f"Mercado Pago - ${price_info['mxn']} MXN",
+            callback_data=f"pay_mp_{plan_key}",
+        )],
+        [InlineKeyboardButton(
+            f"PayPal - ${price_info['usd']:.2f} USD",
+            callback_data=f"pay_paypal_{plan_key}",
+        )],
+    ]
+
+    await query.message.reply_text(
+        f"<b>{price_info['label']}</b>\n\n"
+        "Selecciona tu metodo de pago:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_pay_stripe(update, context):
+    """Handle Stripe payment — create checkout session."""
     import stripe
 
     query = update.callback_query
     await query.answer()
 
-    data = query.data  # "subscribe_basic" or "subscribe_premium"
-    plan = data.replace("subscribe_", "")
+    plan_key = query.data.replace("pay_stripe_", "")  # e.g. "basic_monthly"
+    price_info = PLAN_PRICES.get(plan_key)
+    if not price_info:
+        await query.message.reply_text("Plan no disponible.")
+        return
 
     stripe_key = os.getenv("STRIPE_SECRET_KEY")
     if not stripe_key:
         await query.message.reply_text(
-            "Pagos no disponibles temporalmente.\n"
-            "Contacta /soporte para activar tu suscripcion manualmente."
+            "Stripe no disponible temporalmente.\n"
+            "Intenta con Mercado Pago o contacta /soporte."
         )
-        logger.warning("STRIPE_SECRET_KEY not configured")
         return
 
     stripe.api_key = stripe_key
 
-    # Price IDs from Stripe dashboard
     price_ids = {
-        "basic": os.getenv("STRIPE_PRICE_BASIC"),
-        "premium": os.getenv("STRIPE_PRICE_PREMIUM"),
+        "basic_monthly": os.getenv("STRIPE_PRICE_BASIC"),
+        "basic_annual": os.getenv("STRIPE_PRICE_BASIC_ANNUAL"),
+        "premium_monthly": os.getenv("STRIPE_PRICE_PREMIUM"),
+        "premium_annual": os.getenv("STRIPE_PRICE_PREMIUM_ANNUAL"),
     }
 
-    price_id = price_ids.get(plan)
+    price_id = price_ids.get(plan_key)
     if not price_id:
         await query.message.reply_text(
-            "Plan no disponible. Contacta /soporte."
+            "Este plan aun no esta disponible en Stripe.\n"
+            "Intenta con Mercado Pago o contacta /soporte."
         )
-        logger.error(f"Missing STRIPE_PRICE_{plan.upper()} env var")
         return
 
     user = query.from_user
+    plan_base = plan_key.split("_")[0]  # "basic" or "premium"
     bot_username = (await context.bot.get_me()).username
 
     try:
@@ -316,36 +384,204 @@ async def handle_subscribe_callback(update, context):
             mode="subscription",
             success_url=f"https://t.me/{bot_username}?start=payment_success",
             cancel_url=f"https://t.me/{bot_username}?start=payment_cancel",
-            metadata={
-                "telegram_id": str(user.id),
-                "plan": plan,
-            },
+            metadata={"telegram_id": str(user.id), "plan": plan_base, "period": plan_key},
             client_reference_id=str(user.id),
         )
 
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        keyboard = [[InlineKeyboardButton(
-            f"Pagar Plan {plan.capitalize()}",
-            url=session.url,
-        )]]
+        keyboard = [[InlineKeyboardButton("Pagar con Stripe", url=session.url)]]
 
-        plan_price = "$14.99" if plan == "basic" else "$24.99"
         await query.message.reply_text(
-            f"<b>Checkout - Plan {plan.capitalize()} ({plan_price} USD/mes)</b>\n\n"
-            "Haz clic en el boton para completar el pago con Stripe:\n"
-            "(Se aceptan tarjetas de credito y debito)",
+            f"<b>Stripe - {price_info['label']} (${price_info['usd']:.2f} USD/{price_info['period']})</b>\n\n"
+            "Haz clic para completar el pago:\n"
+            "(Tarjetas de credito y debito)",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
+        logger.info(f"Stripe checkout for {user.id} ({plan_key})")
 
-        logger.info(f"Stripe checkout created for {user.id} (plan={plan})")
-
-    except stripe.error.StripeError as e:
+    except Exception as e:
         logger.error(f"Stripe error: {e}")
+        await query.message.reply_text("Error con Stripe. Intenta Mercado Pago o /soporte.")
+
+
+async def handle_pay_mp(update, context):
+    """Handle Mercado Pago payment — create subscription (preapproval)."""
+    import mercadopago
+
+    query = update.callback_query
+    await query.answer()
+
+    plan_key = query.data.replace("pay_mp_", "")  # e.g. "basic_monthly"
+    price_info = PLAN_PRICES.get(plan_key)
+    if not price_info:
+        await query.message.reply_text("Plan no disponible.")
+        return
+
+    mp_token = os.getenv("MP_ACCESS_TOKEN")
+    if not mp_token:
         await query.message.reply_text(
-            "Error al crear sesion de pago. Intenta de nuevo.\n"
-            "Si persiste: /soporte"
+            "Mercado Pago no disponible temporalmente.\n"
+            "Intenta con Stripe o contacta /soporte."
         )
+        return
+
+    sdk = mercadopago.SDK(mp_token)
+    user = query.from_user
+    plan_base = plan_key.split("_")[0]  # "basic" or "premium"
+    is_annual = "annual" in plan_key
+    bot_username = (await context.bot.get_me()).username
+
+    # Get user email (required by MP)
+    bot_user = db.get_bot_user(user.id)
+    user_email = bot_user.get("email") if bot_user else None
+    if not user_email:
+        await query.message.reply_text(
+            "Necesito tu email para Mercado Pago.\n"
+            "Escribe tu email y luego vuelve a /suscribir."
+        )
+        context.user_data["awaiting_email"] = True
+        return
+
+    preapproval_data = {
+        "reason": f"MedExpert {price_info['label']}",
+        "payer_email": user_email,
+        "auto_recurring": {
+            "frequency": 12 if is_annual else 1,
+            "frequency_type": "months",
+            "transaction_amount": float(price_info["mxn"]),
+            "currency_id": "MXN",
+        },
+        "back_url": f"https://t.me/{bot_username}?start=payment_success",
+        "external_reference": f"{user.id}_{plan_base}",
+        "notification_url": "https://api.medexpert.mx/api/mercadopago/webhook",
+    }
+
+    try:
+        result = sdk.preapproval().create(preapproval_data)
+        response = result.get("response", {})
+        checkout_url = response.get("sandbox_init_point") or response.get("init_point")
+
+        if not checkout_url:
+            await query.message.reply_text("Error creando suscripcion. Contacta /soporte.")
+            logger.error(f"MP preapproval error: {result}")
+            return
+
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = [[InlineKeyboardButton("Pagar con Mercado Pago", url=checkout_url)]]
+
+        await query.message.reply_text(
+            f"<b>Mercado Pago - {price_info['label']} (${price_info['mxn']} MXN/{price_info['period']})</b>\n\n"
+            "Haz clic para suscribirte:\n"
+            "(Tarjeta, transferencia, OXXO y mas)",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        logger.info(f"MP preapproval for {user.id} ({plan_key})")
+
+    except Exception as e:
+        logger.error(f"MercadoPago error: {e}")
+        await query.message.reply_text("Error con Mercado Pago. Intenta Stripe o /soporte.")
+
+
+async def handle_pay_paypal(update, context):
+    """Handle PayPal payment — create subscription via REST API."""
+    import httpx
+
+    query = update.callback_query
+    await query.answer()
+
+    plan_key = query.data.replace("pay_paypal_", "")
+    price_info = PLAN_PRICES.get(plan_key)
+    if not price_info:
+        await query.message.reply_text("Plan no disponible.")
+        return
+
+    client_id = os.getenv("PAYPAL_CLIENT_ID")
+    client_secret = os.getenv("PAYPAL_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        await query.message.reply_text(
+            "PayPal no disponible temporalmente.\n"
+            "Intenta con Stripe o Mercado Pago."
+        )
+        return
+
+    plan_ids = {
+        "basic_monthly": os.getenv("PAYPAL_PLAN_BASIC"),
+        "basic_annual": os.getenv("PAYPAL_PLAN_BASIC_ANNUAL"),
+        "premium_monthly": os.getenv("PAYPAL_PLAN_PREMIUM"),
+        "premium_annual": os.getenv("PAYPAL_PLAN_PREMIUM_ANNUAL"),
+    }
+
+    paypal_plan_id = plan_ids.get(plan_key)
+    if not paypal_plan_id:
+        await query.message.reply_text(
+            "Este plan aun no esta disponible en PayPal.\n"
+            "Intenta con Stripe o Mercado Pago."
+        )
+        return
+
+    user = query.from_user
+    plan_base = plan_key.split("_")[0]
+    bot_username = (await context.bot.get_me()).username
+    paypal_base = os.getenv("PAYPAL_API_BASE", "https://api-m.sandbox.paypal.com")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Get OAuth2 token
+            token_resp = await client.post(
+                f"{paypal_base}/v1/oauth2/token",
+                auth=(client_id, client_secret),
+                data={"grant_type": "client_credentials"},
+            )
+            access_token = token_resp.json().get("access_token")
+
+            # Create subscription
+            sub_resp = await client.post(
+                f"{paypal_base}/v1/billing/subscriptions",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "plan_id": paypal_plan_id,
+                    "custom_id": f"{user.id}_{plan_base}",
+                    "application_context": {
+                        "return_url": f"https://t.me/{bot_username}?start=payment_success",
+                        "cancel_url": f"https://t.me/{bot_username}?start=payment_cancel",
+                        "brand_name": "MedExpert",
+                        "user_action": "SUBSCRIBE_NOW",
+                    },
+                },
+            )
+            sub_data = sub_resp.json()
+
+            # Find approval link
+            approve_url = None
+            for link in sub_data.get("links", []):
+                if link.get("rel") == "approve":
+                    approve_url = link["href"]
+                    break
+
+            if not approve_url:
+                await query.message.reply_text("Error creando suscripcion PayPal. Contacta /soporte.")
+                logger.error(f"PayPal subscription error: {sub_data}")
+                return
+
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = [[InlineKeyboardButton("Pagar con PayPal", url=approve_url)]]
+
+            await query.message.reply_text(
+                f"<b>PayPal - {price_info['label']} (${price_info['usd']:.2f} USD/{price_info['period']})</b>\n\n"
+                "Haz clic para suscribirte con PayPal:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+            logger.info(f"PayPal subscription for {user.id} ({plan_key})")
+
+    except Exception as e:
+        logger.error(f"PayPal error: {e}")
+        await query.message.reply_text("Error con PayPal. Intenta Stripe o Mercado Pago.")
 
 
 async def handle_voice(update, context):
@@ -475,11 +711,31 @@ async def handle_voice(update, context):
 
 async def handle_text(update, context):
     """Process text message: query RAG + LLM → respond."""
+    import re
+
     user = update.effective_user
     specialty = context.bot_data.get("specialty", "oncologia")
     text = update.message.text.strip()
 
     if not text:
+        return
+
+    # Intercept email capture
+    if context.user_data.get("awaiting_email"):
+        email = text.strip().lower()
+        if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            db.update_bot_user(user.id, email=email)
+            context.user_data.pop("awaiting_email", None)
+            await update.message.reply_text(
+                f"Email guardado: <b>{email}</b>\n\n"
+                "Ahora usa /suscribir para ver los planes.",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                "Ese no parece un email valido. Intenta de nuevo:\n"
+                "(ejemplo: doctor@hospital.com)"
+            )
         return
 
     # Check limits
@@ -949,7 +1205,10 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_pdf_callback, pattern=r"^pdf_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_feedback_prompt, pattern=r"^eval_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_feedback_response, pattern=r"^fb_[a-e]_\d+$"))
-    app.add_handler(CallbackQueryHandler(handle_subscribe_callback, pattern=r"^subscribe_(basic|premium)$"))
+    app.add_handler(CallbackQueryHandler(handle_subscribe_callback, pattern=r"^subscribe_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_pay_stripe, pattern=r"^pay_stripe_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_pay_mp, pattern=r"^pay_mp_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_pay_paypal, pattern=r"^pay_paypal_(basic|premium)_(monthly|annual)$"))
 
     # Error handler
     app.add_error_handler(handle_error)
