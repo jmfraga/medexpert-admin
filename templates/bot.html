@@ -165,6 +165,60 @@
             gap: 6px;
             align-items: center;
         }
+
+        .verif-card {
+            background: #111827;
+            border: 1px solid #1e2640;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+        }
+        .verif-card .doc-preview {
+            width: 120px;
+            height: 90px;
+            border-radius: 6px;
+            object-fit: cover;
+            border: 1px solid #2a3050;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .verif-card .doc-info {
+            flex: 1;
+            font-size: 0.85em;
+            line-height: 1.7;
+        }
+        .verif-card .doc-actions {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .referral-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82em;
+        }
+        .referral-table th {
+            text-align: left;
+            padding: 8px 12px;
+            color: #64748b;
+            font-weight: 600;
+            border-bottom: 1px solid #1e2640;
+        }
+        .referral-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #111827;
+            color: #94a3b8;
+        }
+
+        .doc-modal-img {
+            max-width: 100%;
+            max-height: 70vh;
+            border-radius: 8px;
+        }
 {% endblock %}
 
 {% block content %}
@@ -210,6 +264,8 @@
         <div class="tabs">
             <div class="tab active" onclick="switchTab('users')">Usuarios ({{ users|length }})</div>
             <div class="tab" onclick="switchTab('consultations')">Consultas recientes</div>
+            <div class="tab" onclick="switchTab('verifications')">Verificaciones {% if pending_verifications %}({{ pending_verifications|length }}){% endif %}</div>
+            <div class="tab" onclick="switchTab('referrals')">Referidos</div>
         </div>
 
         <div id="tab-users" class="tab-content active">
@@ -336,7 +392,112 @@
                 </tbody>
             </table>
         </div>
+        <div id="tab-verifications" class="tab-content">
+            <h3 class="section-title">Verificaciones pendientes</h3>
+            {% if pending_verifications %}
+                {% set ns = namespace(current_user=0) %}
+                {% for doc in pending_verifications %}
+                    {% if doc.telegram_id != ns.current_user %}
+                        {% set ns.current_user = doc.telegram_id %}
+                        <div class="verif-card" id="verif-doc-{{ doc.id }}">
+                            <img class="doc-preview"
+                                src="/api/verifications/file/{{ doc.telegram_id }}/{{ doc.doc_type }}"
+                                alt="{{ doc.doc_type }}"
+                                onclick="openDocPreview('/api/verifications/file/{{ doc.telegram_id }}/{{ doc.doc_type }}')">
+                            <div class="doc-info">
+                                <b style="color:#e0e6ed;">{{ doc.first_name }} {{ doc.last_name or '' }}</b>
+                                <span style="color:#475569;">@{{ doc.username or 'N/A' }}</span><br>
+                                <b>Documento:</b> {{ doc.doc_type | upper }}<br>
+                                <b>Email:</b> {{ doc.email or '-' }}<br>
+                                <b>Fecha:</b> {{ doc.created_at[:16] }}
+                            </div>
+                            <div class="doc-actions">
+                                <button class="btn success" onclick="reviewDoc({{ doc.id }}, 'approved')" style="padding:4px 12px; font-size:0.8em;">Aprobar</button>
+                                <button class="btn danger" onclick="reviewDoc({{ doc.id }}, 'rejected')" style="padding:4px 12px; font-size:0.8em;">Rechazar</button>
+                            </div>
+                        </div>
+                    {% else %}
+                        <div class="verif-card" id="verif-doc-{{ doc.id }}">
+                            <img class="doc-preview"
+                                src="/api/verifications/file/{{ doc.telegram_id }}/{{ doc.doc_type }}"
+                                alt="{{ doc.doc_type }}"
+                                onclick="openDocPreview('/api/verifications/file/{{ doc.telegram_id }}/{{ doc.doc_type }}')">
+                            <div class="doc-info">
+                                <span style="color:#475569;">mismo usuario</span><br>
+                                <b>Documento:</b> {{ doc.doc_type | upper }}<br>
+                                <b>Fecha:</b> {{ doc.created_at[:16] }}
+                            </div>
+                            <div class="doc-actions">
+                                <button class="btn success" onclick="reviewDoc({{ doc.id }}, 'approved')" style="padding:4px 12px; font-size:0.8em;">Aprobar</button>
+                                <button class="btn danger" onclick="reviewDoc({{ doc.id }}, 'rejected')" style="padding:4px 12px; font-size:0.8em;">Rechazar</button>
+                            </div>
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            {% else %}
+                <p style="color:#475569; font-size:0.85em; padding:16px 0;">No hay verificaciones pendientes</p>
+            {% endif %}
+        </div>
+
+        <div id="tab-referrals" class="tab-content">
+            <div class="stats-row" style="margin-bottom:20px;">
+                <div class="stat-card">
+                    <div class="stat-card-value">{{ referral_stats.total }}</div>
+                    <div class="stat-card-label">Total referidos</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-value">{{ referral_stats.pending }}</div>
+                    <div class="stat-card-label">Pendientes</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-value">{{ referral_stats.earned }}</div>
+                    <div class="stat-card-label">Ganados</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-value">{{ referral_stats.claimed }}</div>
+                    <div class="stat-card-label">Reclamados</div>
+                </div>
+            </div>
+
+            <h3 class="section-title">Top referidores</h3>
+            {% if referral_stats.top_referrers %}
+            <table class="referral-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Usuario</th>
+                        <th>Referidos</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in referral_stats.top_referrers %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            <span style="color:#e0e6ed;">{{ r.first_name }}</span>
+                            <span style="color:#475569;">@{{ r.username or 'N/A' }}</span>
+                        </td>
+                        <td><span class="badge amber">{{ r.referral_count }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+                <p style="color:#475569; font-size:0.85em; padding:16px 0;">No hay referidos aun</p>
+            {% endif %}
+        </div>
     </div>
+
+    <!-- Document preview modal -->
+    <div class="modal-overlay" id="docPreviewModal">
+        <div class="modal" style="max-width:700px; text-align:center;">
+            <img id="docPreviewImg" class="doc-modal-img" src="" alt="Documento">
+            <div class="modal-actions" style="margin-top:12px;">
+                <button class="btn" onclick="document.getElementById('docPreviewModal').classList.remove('show')">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- User detail modal -->
     <div class="modal-overlay" id="userDetailModal">
         <div class="modal" style="max-width:450px;">
@@ -373,6 +534,28 @@
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.getElementById('tab-' + tab).classList.add('active');
             event.target.classList.add('active');
+        }
+
+        function openDocPreview(url) {
+            document.getElementById('docPreviewImg').src = url;
+            document.getElementById('docPreviewModal').classList.add('show');
+        }
+
+        async function reviewDoc(docId, status) {
+            let adminNotes = '';
+            if (status === 'rejected') {
+                adminNotes = prompt('Razon del rechazo:');
+                if (adminNotes === null) return;
+            }
+            const res = await apiCall('/api/verifications/' + docId + '/review', 'PUT', {
+                status, admin_notes: adminNotes
+            });
+            if (res.ok) {
+                showToast(status === 'approved' ? 'Documento aprobado' : 'Documento rechazado');
+                document.getElementById('verif-doc-' + docId).remove();
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
         }
 
         // User data for detail modal

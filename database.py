@@ -153,6 +153,67 @@ def init_db():
             FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
         );
 
+        -- Pricing Plans
+        CREATE TABLE IF NOT EXISTS pricing_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_key TEXT UNIQUE NOT NULL,
+            label TEXT NOT NULL,
+            tier TEXT NOT NULL CHECK(tier IN ('basic', 'premium')),
+            period TEXT NOT NULL CHECK(period IN ('monthly', 'annual')),
+            usd_price REAL NOT NULL,
+            mxn_price REAL NOT NULL,
+            stripe_price_id TEXT DEFAULT '',
+            paypal_plan_id TEXT DEFAULT '',
+            mp_preapproval_id TEXT DEFAULT '',
+            clip_plan_id TEXT DEFAULT '',
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        -- Promotions
+        CREATE TABLE IF NOT EXISTS promotions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE NOT NULL,
+            description TEXT DEFAULT '',
+            discount_percent INTEGER NOT NULL DEFAULT 0,
+            discount_amount_usd REAL DEFAULT 0,
+            valid_from TEXT DEFAULT (datetime('now')),
+            valid_until TEXT,
+            max_uses INTEGER DEFAULT 0,
+            used_count INTEGER DEFAULT 0,
+            applies_to TEXT DEFAULT 'all',
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        -- Verification Documents
+        CREATE TABLE IF NOT EXISTS verification_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            doc_type TEXT NOT NULL CHECK(doc_type IN ('cedula', 'ine')),
+            file_path TEXT NOT NULL,
+            status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+            admin_notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            reviewed_at TEXT,
+            FOREIGN KEY (telegram_id) REFERENCES bot_users(telegram_id) ON DELETE CASCADE
+        );
+
+        -- Referral Rewards
+        CREATE TABLE IF NOT EXISTS referral_rewards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id INTEGER NOT NULL,
+            referred_id INTEGER NOT NULL,
+            status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'earned', 'claimed', 'expired')),
+            bonus_type TEXT DEFAULT 'free_month',
+            bonus_value REAL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            claimed_at TEXT,
+            FOREIGN KEY (referrer_id) REFERENCES bot_users(telegram_id),
+            FOREIGN KEY (referred_id) REFERENCES bot_users(telegram_id)
+        );
+
         -- Telegram Bot Users
         CREATE TABLE IF NOT EXISTS bot_users (
             telegram_id INTEGER PRIMARY KEY,
@@ -291,6 +352,34 @@ def init_db():
             console.print("[green]Tickets table migrated (added support type)[/green]")
     except Exception as e:
         console.print(f"[yellow]Tickets migration note: {e}[/yellow]")
+    # Bot user verification columns
+    for col, defn in [
+        ("verification_status", "TEXT DEFAULT 'none'"),
+        ("verification_notes", "TEXT DEFAULT ''"),
+        ("verified_at", "TEXT DEFAULT NULL"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE bot_users ADD COLUMN {col} {defn}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+    # Seed default pricing plans if empty
+    try:
+        count = conn.execute("SELECT COUNT(*) as cnt FROM pricing_plans").fetchone()["cnt"]
+        if count == 0:
+            conn.executemany("""
+                INSERT INTO pricing_plans (plan_key, label, tier, period, usd_price, mxn_price)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, [
+                ("basic_monthly", "Básico Mensual", "basic", "monthly", 14.99, 299),
+                ("basic_annual", "Básico Anual", "basic", "annual", 149.90, 2990),
+                ("premium_monthly", "Premium Mensual", "premium", "monthly", 24.99, 499),
+                ("premium_annual", "Premium Anual", "premium", "annual", 249.90, 4990),
+            ])
+            conn.commit()
+            console.print("[green]Default pricing plans seeded[/green]")
+    except Exception:
+        pass
     conn.close()
     console.print("[green]Database initialized[/green]")
 
@@ -1137,5 +1226,298 @@ def get_all_bot_users() -> list[dict]:
         FROM bot_users bu
         ORDER BY bu.last_activity DESC
     """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────
+# Pricing Plans
+# ─────────────────────────────────────────────
+
+def get_all_pricing_plans(active_only: bool = False) -> list[dict]:
+    conn = get_connection()
+    q = "SELECT * FROM pricing_plans"
+    if active_only:
+        q += " WHERE is_active = 1"
+    q += " ORDER BY tier, period"
+    rows = conn.execute(q).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_pricing_plan(plan_key: str) -> dict | None:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM pricing_plans WHERE plan_key = ?", (plan_key,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_pricing_plan(plan_id: int, **kwargs) -> bool:
+    conn = get_connection()
+    allowed = {"label", "usd_price", "mxn_price", "stripe_price_id", "paypal_plan_id",
+               "mp_preapproval_id", "clip_plan_id", "is_active"}
+    updates, params = [], []
+    for key, val in kwargs.items():
+        if key in allowed and val is not None:
+            updates.append(f"{key} = ?")
+            params.append(val)
+    if updates:
+        updates.append("updated_at = datetime('now')")
+        params.append(plan_id)
+        conn.execute(f"UPDATE pricing_plans SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+    conn.close()
+    return bool(updates)
+
+
+def get_plan_prices_for_bot() -> dict:
+    """Return pricing in the format bot.py expects: {plan_key: {usd, mxn, label, period}}."""
+    plans = get_all_pricing_plans(active_only=True)
+    result = {}
+    for p in plans:
+        period_label = "mes" if p["period"] == "monthly" else "año"
+        result[p["plan_key"]] = {
+            "usd": p["usd_price"],
+            "mxn": p["mxn_price"],
+            "label": p["label"],
+            "period": period_label,
+        }
+    return result
+
+
+# ─────────────────────────────────────────────
+# Promotions
+# ─────────────────────────────────────────────
+
+def get_all_promotions() -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM promotions ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_promotion(code: str, description: str = "", discount_percent: int = 0,
+                     discount_amount_usd: float = 0, valid_until: str = None,
+                     max_uses: int = 0, applies_to: str = "all") -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            INSERT INTO promotions (code, description, discount_percent, discount_amount_usd,
+                                    valid_until, max_uses, applies_to)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (code.upper(), description, discount_percent, discount_amount_usd,
+              valid_until, max_uses, applies_to))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_promotion(promo_id: int, **kwargs) -> bool:
+    conn = get_connection()
+    allowed = {"code", "description", "discount_percent", "discount_amount_usd",
+               "valid_until", "max_uses", "applies_to", "is_active"}
+    updates, params = [], []
+    for key, val in kwargs.items():
+        if key in allowed and val is not None:
+            updates.append(f"{key} = ?")
+            params.append(val)
+    if updates:
+        params.append(promo_id)
+        conn.execute(f"UPDATE promotions SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+    conn.close()
+    return bool(updates)
+
+
+def delete_promotion(promo_id: int) -> bool:
+    conn = get_connection()
+    conn.execute("DELETE FROM promotions WHERE id = ?", (promo_id,))
+    conn.commit()
+    deleted = conn.total_changes > 0
+    conn.close()
+    return deleted
+
+
+def validate_promo_code(code: str) -> dict | None:
+    """Validate a promo code and return it if valid."""
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT * FROM promotions
+        WHERE code = ? AND is_active = 1
+        AND (max_uses = 0 OR used_count < max_uses)
+        AND (valid_until IS NULL OR valid_until >= datetime('now'))
+    """, (code.upper(),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def use_promo_code(promo_id: int):
+    conn = get_connection()
+    conn.execute("UPDATE promotions SET used_count = used_count + 1 WHERE id = ?", (promo_id,))
+    conn.commit()
+    conn.close()
+
+
+# ─────────────────────────────────────────────
+# Verification Documents
+# ─────────────────────────────────────────────
+
+def create_verification_doc(telegram_id: int, doc_type: str, file_path: str) -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            INSERT INTO verification_documents (telegram_id, doc_type, file_path)
+            VALUES (?, ?, ?)
+        """, (telegram_id, doc_type, file_path))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_pending_verifications() -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT vd.*, bu.username, bu.first_name, bu.last_name, bu.email
+        FROM verification_documents vd
+        JOIN bot_users bu ON vd.telegram_id = bu.telegram_id
+        WHERE vd.status = 'pending'
+        ORDER BY vd.created_at ASC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_verification_docs(telegram_id: int) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT * FROM verification_documents
+        WHERE telegram_id = ? ORDER BY created_at DESC
+    """, (telegram_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def review_verification(doc_id: int, status: str, admin_notes: str = "") -> bool:
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE verification_documents
+            SET status = ?, admin_notes = ?, reviewed_at = datetime('now')
+            WHERE id = ?
+        """, (status, admin_notes, doc_id))
+        # If approved, check if user has both docs approved
+        row = conn.execute("SELECT telegram_id FROM verification_documents WHERE id = ?",
+                           (doc_id,)).fetchone()
+        if row and status == "approved":
+            tid = row["telegram_id"]
+            approved = conn.execute("""
+                SELECT COUNT(DISTINCT doc_type) as cnt FROM verification_documents
+                WHERE telegram_id = ? AND status = 'approved'
+            """, (tid,)).fetchone()["cnt"]
+            if approved >= 2:  # Both cedula and INE approved
+                conn.execute("""
+                    UPDATE bot_users SET is_verified = 1, verification_status = 'approved',
+                        verified_at = datetime('now')
+                    WHERE telegram_id = ?
+                """, (tid,))
+        elif row and status == "rejected":
+            tid = row["telegram_id"]
+            conn.execute("""
+                UPDATE bot_users SET verification_status = 'rejected',
+                    verification_notes = ?
+                WHERE telegram_id = ?
+            """, (admin_notes, tid))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+# ─────────────────────────────────────────────
+# Referral Rewards
+# ─────────────────────────────────────────────
+
+def process_referral(referrer_code: str, referred_telegram_id: int) -> dict | None:
+    """Process a referral: link referred user and create pending reward."""
+    conn = get_connection()
+    try:
+        # Find referrer by code
+        referrer = conn.execute(
+            "SELECT telegram_id FROM bot_users WHERE referral_code = ?",
+            (referrer_code,)
+        ).fetchone()
+        if not referrer:
+            return None
+        referrer_id = referrer["telegram_id"]
+        if referrer_id == referred_telegram_id:
+            return None  # Can't refer yourself
+        # Check if already referred
+        existing = conn.execute(
+            "SELECT referred_by FROM bot_users WHERE telegram_id = ?",
+            (referred_telegram_id,)
+        ).fetchone()
+        if existing and existing["referred_by"]:
+            return None  # Already referred by someone
+        # Link referred_by
+        conn.execute("UPDATE bot_users SET referred_by = ? WHERE telegram_id = ?",
+                     (referrer_id, referred_telegram_id))
+        # Create pending reward
+        conn.execute("""
+            INSERT INTO referral_rewards (referrer_id, referred_id, status, bonus_type)
+            VALUES (?, ?, 'pending', 'free_queries')
+        """, (referrer_id, referred_telegram_id))
+        conn.commit()
+        return {"referrer_id": referrer_id, "referred_id": referred_telegram_id}
+    finally:
+        conn.close()
+
+
+def activate_referral_reward(referred_telegram_id: int) -> bool:
+    """Activate reward when referred user subscribes."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE referral_rewards SET status = 'earned'
+            WHERE referred_id = ? AND status = 'pending'
+        """, (referred_telegram_id,))
+        conn.commit()
+        return conn.total_changes > 0
+    finally:
+        conn.close()
+
+
+def get_referral_stats() -> dict:
+    conn = get_connection()
+    try:
+        total = conn.execute("SELECT COUNT(*) as cnt FROM referral_rewards").fetchone()["cnt"]
+        pending = conn.execute("SELECT COUNT(*) as cnt FROM referral_rewards WHERE status='pending'").fetchone()["cnt"]
+        earned = conn.execute("SELECT COUNT(*) as cnt FROM referral_rewards WHERE status='earned'").fetchone()["cnt"]
+        claimed = conn.execute("SELECT COUNT(*) as cnt FROM referral_rewards WHERE status='claimed'").fetchone()["cnt"]
+        top_referrers = conn.execute("""
+            SELECT bu.telegram_id, bu.username, bu.first_name, COUNT(*) as referral_count
+            FROM referral_rewards rr
+            JOIN bot_users bu ON rr.referrer_id = bu.telegram_id
+            GROUP BY rr.referrer_id
+            ORDER BY referral_count DESC LIMIT 10
+        """).fetchall()
+        return {
+            "total": total, "pending": pending, "earned": earned, "claimed": claimed,
+            "top_referrers": [dict(r) for r in top_referrers],
+        }
+    finally:
+        conn.close()
+
+
+def get_user_referrals(telegram_id: int) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT rr.*, bu.username, bu.first_name
+        FROM referral_rewards rr
+        JOIN bot_users bu ON rr.referred_id = bu.telegram_id
+        WHERE rr.referrer_id = ?
+        ORDER BY rr.created_at DESC
+    """, (telegram_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]

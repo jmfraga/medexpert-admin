@@ -92,6 +92,91 @@
         .test-result.ok { background: #14532d; color: #4ade80; }
         .test-result.fail { background: #3f1219; color: #f87171; }
         .test-result.testing { background: #1a1500; color: #f59e0b; }
+
+        .pricing-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+            margin-bottom: 12px;
+        }
+        .pricing-table th {
+            text-align: left;
+            padding: 8px 10px;
+            color: #64748b;
+            font-weight: 600;
+            font-size: 0.85em;
+            border-bottom: 1px solid #1e2640;
+        }
+        .pricing-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #111827;
+            color: #94a3b8;
+        }
+        .pricing-table input {
+            background: #1a2040;
+            border: 1px solid #2a3050;
+            border-radius: 4px;
+            color: #e0e6ed;
+            padding: 4px 8px;
+            font-size: 0.9em;
+            font-family: monospace;
+            width: 90px;
+        }
+        .pricing-table input:focus { outline: none; border-color: #f59e0b; }
+        .pricing-table input.wide { width: 160px; }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 0.72em;
+            font-weight: 600;
+        }
+        .badge.green { background: #14532d; color: #4ade80; }
+        .badge.red { background: #3f1219; color: #f87171; }
+        .badge.amber { background: #92400e; color: #fbbf24; }
+
+        .promo-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0;
+            border-bottom: 1px solid #1e2640;
+            font-size: 0.85em;
+        }
+        .promo-row:last-child { border-bottom: none; }
+
+        .switch-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+        }
+        .switch {
+            position: relative;
+            width: 48px;
+            height: 26px;
+            cursor: pointer;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .switch-slider {
+            position: absolute;
+            inset: 0;
+            background: #3f1219;
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+        .switch-slider:before {
+            content: '';
+            position: absolute;
+            width: 20px; height: 20px;
+            left: 3px; bottom: 3px;
+            background: #f87171;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+        .switch input:checked + .switch-slider { background: #14532d; }
+        .switch input:checked + .switch-slider:before { transform: translateX(22px); background: #4ade80; }
 {% endblock %}
 
 {% block content %}
@@ -161,6 +246,117 @@
                 Este modelo se usara como default en las licencias nuevas.
                 Los clientes pueden cambiar el modelo desde su interfaz.
             </p>
+        </div>
+
+        <div class="config-section">
+            <h2>Modo de pagos <span class="save-status" id="paymentSaveStatus">Guardado</span></h2>
+            <div class="switch-container">
+                <label class="switch">
+                    <input type="checkbox" id="paymentModeSwitch"
+                        {% if payment_mode == 'production' %}checked{% endif %}
+                        onchange="togglePaymentMode()">
+                    <span class="switch-slider"></span>
+                </label>
+                <span id="paymentModeLabel" style="font-size:0.9em;">
+                    {% if payment_mode == 'production' %}
+                        <span class="badge green">PRODUCCION</span> — Pagos reales activos
+                    {% else %}
+                        <span class="badge amber">TEST</span> — Modo pruebas (sandbox)
+                    {% endif %}
+                </span>
+            </div>
+            <p style="font-size:0.78em; color:#475569; margin-top:4px;">
+                En modo TEST se usan las claves sandbox de Stripe, PayPal y Mercado Pago.
+                En PRODUCCION se usan las claves reales. Verifica tus webhooks antes de activar.
+            </p>
+        </div>
+
+        <div class="config-section">
+            <h2>Planes y precios <span class="save-status" id="pricingSaveStatus">Guardado</span></h2>
+            <table class="pricing-table">
+                <thead>
+                    <tr>
+                        <th>Plan</th>
+                        <th>USD</th>
+                        <th>MXN</th>
+                        <th>Stripe Price ID</th>
+                        <th>Activo</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in pricing_plans %}
+                    <tr id="plan-row-{{ p.id }}">
+                        <td>
+                            <span style="color:#e0e6ed; font-weight:500;">{{ p.label }}</span><br>
+                            <span style="font-size:0.8em; color:#475569;">{{ p.plan_key }}</span>
+                        </td>
+                        <td><input type="number" step="0.01" value="{{ p.usd_price }}" id="plan-usd-{{ p.id }}"></td>
+                        <td><input type="number" step="1" value="{{ p.mxn_price|int }}" id="plan-mxn-{{ p.id }}"></td>
+                        <td><input type="text" class="wide" value="{{ p.stripe_price_id or '' }}" id="plan-stripe-{{ p.id }}" placeholder="price_..."></td>
+                        <td>
+                            {% if p.is_active %}
+                                <span class="badge green">Si</span>
+                            {% else %}
+                                <span class="badge red">No</span>
+                            {% endif %}
+                        </td>
+                        <td><button class="btn primary" onclick="savePlan({{ p.id }})" style="padding:3px 10px; font-size:0.78em;">Guardar</button></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <p style="font-size:0.78em; color:#475569;">
+                Los precios se sincronizan automaticamente con el bot de Telegram.
+            </p>
+        </div>
+
+        <div class="config-section">
+            <h2>Promociones</h2>
+            <div id="promoList">
+                {% for promo in promotions %}
+                <div class="promo-row" id="promo-{{ promo.id }}">
+                    <span style="color:#f59e0b; font-weight:600; font-family:monospace; min-width:100px;">{{ promo.code }}</span>
+                    <span style="flex:1; color:#94a3b8;">{{ promo.description }}</span>
+                    {% if promo.discount_percent > 0 %}
+                        <span class="badge amber">-{{ promo.discount_percent }}%</span>
+                    {% elif promo.discount_amount_usd > 0 %}
+                        <span class="badge amber">-${{ promo.discount_amount_usd }}</span>
+                    {% endif %}
+                    <span style="font-size:0.78em; color:#475569;">
+                        {{ promo.used_count }}/{{ promo.max_uses if promo.max_uses > 0 else 'ilim' }}
+                    </span>
+                    {% if promo.is_active %}
+                        <span class="badge green">Activa</span>
+                    {% else %}
+                        <span class="badge red">Inactiva</span>
+                    {% endif %}
+                    <button class="btn danger" onclick="deletePromo({{ promo.id }})" style="padding:2px 8px; font-size:0.75em;">X</button>
+                </div>
+                {% endfor %}
+                {% if not promotions %}
+                <p style="font-size:0.85em; color:#475569; padding:8px 0;">No hay promociones activas</p>
+                {% endif %}
+            </div>
+            <div style="margin-top:12px; display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                <div>
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">Codigo</label>
+                    <input class="config-input" id="newPromoCode" placeholder="WELCOME20" style="width:120px;">
+                </div>
+                <div>
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">Descripcion</label>
+                    <input class="config-input" id="newPromoDesc" placeholder="20% descuento" style="width:180px;">
+                </div>
+                <div>
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">% Desc.</label>
+                    <input class="config-input" type="number" id="newPromoPercent" value="0" style="width:60px;">
+                </div>
+                <div>
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">Max usos</label>
+                    <input class="config-input" type="number" id="newPromoMaxUses" value="0" style="width:60px;">
+                </div>
+                <button class="btn success" onclick="createPromo()">Crear</button>
+            </div>
         </div>
 
         <div class="config-section">
@@ -234,6 +430,81 @@
                     alert('Error: ' + (data.error || 'desconocido'));
                 }
             });
+        }
+
+        async function togglePaymentMode() {
+            const checked = document.getElementById('paymentModeSwitch').checked;
+            const mode = checked ? 'production' : 'test';
+
+            if (mode === 'production') {
+                if (!confirm('Estas seguro de activar pagos reales? Verifica que tus webhooks y claves esten correctas.')) {
+                    document.getElementById('paymentModeSwitch').checked = false;
+                    return;
+                }
+            }
+
+            const res = await apiCall('/api/settings/payment-mode', 'PUT', { mode });
+            if (res.ok) {
+                const label = document.getElementById('paymentModeLabel');
+                if (mode === 'production') {
+                    label.innerHTML = '<span class="badge green">PRODUCCION</span> — Pagos reales activos';
+                } else {
+                    label.innerHTML = '<span class="badge amber">TEST</span> — Modo pruebas (sandbox)';
+                }
+                const status = document.getElementById('paymentSaveStatus');
+                status.classList.add('show');
+                setTimeout(() => status.classList.remove('show'), 2000);
+            }
+        }
+
+        async function savePlan(planId) {
+            const usd = document.getElementById('plan-usd-' + planId).value;
+            const mxn = document.getElementById('plan-mxn-' + planId).value;
+            const stripe = document.getElementById('plan-stripe-' + planId).value;
+
+            const res = await apiCall('/api/pricing/plans/' + planId, 'PUT', {
+                usd_price: usd,
+                mxn_price: mxn,
+                stripe_price_id: stripe,
+            });
+            if (res.ok) {
+                const status = document.getElementById('pricingSaveStatus');
+                status.classList.add('show');
+                setTimeout(() => status.classList.remove('show'), 2000);
+                showToast('Precio actualizado');
+            } else {
+                showToast('Error guardando precio', 'error');
+            }
+        }
+
+        async function createPromo() {
+            const code = document.getElementById('newPromoCode').value.trim();
+            const description = document.getElementById('newPromoDesc').value.trim();
+            const discount_percent = parseInt(document.getElementById('newPromoPercent').value) || 0;
+            const max_uses = parseInt(document.getElementById('newPromoMaxUses').value) || 0;
+
+            if (!code) { showToast('Ingresa un codigo', 'error'); return; }
+
+            const res = await apiCall('/api/promotions', 'POST', {
+                code, description, discount_percent, max_uses
+            });
+            if (res.ok) {
+                showToast('Promocion creada');
+                setTimeout(() => location.reload(), 800);
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        async function deletePromo(promoId) {
+            if (!confirm('Eliminar esta promocion?')) return;
+            const res = await apiCall('/api/promotions/' + promoId, 'DELETE');
+            if (res.ok) {
+                document.getElementById('promo-' + promoId).remove();
+                showToast('Promocion eliminada');
+            } else {
+                showToast('Error eliminando', 'error');
+            }
         }
 
         function testApi(provider) {

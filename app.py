@@ -718,12 +718,16 @@ async def bot_dashboard(request: Request):
     stats = db.get_bot_stats()
     users = db.get_all_bot_users()
     consultations = db.get_bot_recent_consultations(limit=50)
+    pending_verifications = db.get_pending_verifications()
+    referral_stats = db.get_referral_stats()
     return templates.TemplateResponse("bot.html", {
         "request": request,
         "active_page": "bot",
         "stats": stats,
         "users": users,
         "consultations": consultations,
+        "pending_verifications": pending_verifications,
+        "referral_stats": referral_stats,
     })
 
 
@@ -788,6 +792,191 @@ async def notify_bot_user(telegram_id: int, request: Request):
         return JSONResponse({"ok": False, "error": str(e)})
 
 
+# ─────────────────────────────────────────────
+# Pricing Plans Management
+# ─────────────────────────────────────────────
+
+@app.get("/api/pricing/plans")
+async def get_pricing_plans():
+    plans = db.get_all_pricing_plans()
+    return JSONResponse({"ok": True, "plans": plans})
+
+
+@app.put("/api/pricing/plans/{plan_id}")
+async def update_pricing_plan(plan_id: int, request: Request):
+    data = await request.json()
+    updated = db.update_pricing_plan(
+        plan_id,
+        label=data.get("label"),
+        usd_price=float(data["usd_price"]) if "usd_price" in data else None,
+        mxn_price=float(data["mxn_price"]) if "mxn_price" in data else None,
+        stripe_price_id=data.get("stripe_price_id"),
+        paypal_plan_id=data.get("paypal_plan_id"),
+        mp_preapproval_id=data.get("mp_preapproval_id"),
+        clip_plan_id=data.get("clip_plan_id"),
+        is_active=int(data["is_active"]) if "is_active" in data else None,
+    )
+    return JSONResponse({"ok": updated})
+
+
+# ─────────────────────────────────────────────
+# Promotions Management
+# ─────────────────────────────────────────────
+
+@app.get("/api/promotions")
+async def get_promotions():
+    promos = db.get_all_promotions()
+    return JSONResponse({"ok": True, "promotions": promos})
+
+
+@app.post("/api/promotions")
+async def create_promotion(request: Request):
+    data = await request.json()
+    code = data.get("code", "").strip()
+    if not code:
+        return JSONResponse({"ok": False, "error": "Código requerido"}, status_code=400)
+    promo_id = db.create_promotion(
+        code=code,
+        description=data.get("description", ""),
+        discount_percent=int(data.get("discount_percent", 0)),
+        discount_amount_usd=float(data.get("discount_amount_usd", 0)),
+        valid_until=data.get("valid_until") or None,
+        max_uses=int(data.get("max_uses", 0)),
+        applies_to=data.get("applies_to", "all"),
+    )
+    return JSONResponse({"ok": True, "id": promo_id})
+
+
+@app.put("/api/promotions/{promo_id}")
+async def update_promotion(promo_id: int, request: Request):
+    data = await request.json()
+    updated = db.update_promotion(promo_id, **{
+        k: v for k, v in data.items()
+        if k in ("code", "description", "discount_percent", "discount_amount_usd",
+                 "valid_until", "max_uses", "applies_to", "is_active")
+    })
+    return JSONResponse({"ok": updated})
+
+
+@app.delete("/api/promotions/{promo_id}")
+async def delete_promotion(promo_id: int):
+    deleted = db.delete_promotion(promo_id)
+    if not deleted:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+# ─────────────────────────────────────────────
+# Verification Management
+# ─────────────────────────────────────────────
+
+@app.get("/api/verifications/pending")
+async def get_pending_verifications():
+    docs = db.get_pending_verifications()
+    return JSONResponse({"ok": True, "verifications": docs})
+
+
+@app.get("/api/verifications/{telegram_id}")
+async def get_user_verifications(telegram_id: int):
+    docs = db.get_verification_docs(telegram_id)
+    return JSONResponse({"ok": True, "documents": docs})
+
+
+@app.put("/api/verifications/{doc_id}/review")
+async def review_verification(doc_id: int, request: Request):
+    data = await request.json()
+    status = data.get("status", "")
+    if status not in ("approved", "rejected"):
+        return JSONResponse({"ok": False, "error": "Status must be approved or rejected"}, status_code=400)
+    admin_notes = data.get("admin_notes", "")
+    db.review_verification(doc_id, status, admin_notes)
+
+    # Notify user via Telegram
+    try:
+        import httpx
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        if bot_token:
+            conn = db.get_connection()
+            row = conn.execute("SELECT telegram_id FROM verification_documents WHERE id = ?", (doc_id,)).fetchone()
+            conn.close()
+            if row:
+                telegram_id = row["telegram_id"]
+                if status == "approved":
+                    # Check if fully approved (both docs)
+                    user = db.get_bot_user(telegram_id)
+                    if user and user.get("is_verified"):
+                        msg = (
+                            "✅ <b>Verificación aprobada</b>\n\n"
+                            "Tu identidad como profesional de la salud ha sido verificada.\n"
+                            "Ya puedes acceder a funciones exclusivas."
+                        )
+                    else:
+                        msg = "✅ Documento aprobado. Esperando revisión del segundo documento."
+                else:
+                    msg = (
+                        f"❌ <b>Documento rechazado</b>\n\n"
+                        f"{admin_notes}\n\n"
+                        "Puedes volver a intentar con /verificar"
+                    )
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": telegram_id, "text": msg, "parse_mode": "HTML"},
+                    )
+    except Exception as e:
+        logger.error(f"Failed to notify user about verification: {e}")
+
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/verifications/file/{telegram_id}/{doc_type}")
+async def serve_verification_file(telegram_id: int, doc_type: str):
+    """Serve verification document image for admin review."""
+    verify_dir = Path(f"data/verifications/{telegram_id}")
+    if not verify_dir.exists():
+        return JSONResponse({"ok": False, "error": "No documents found"}, status_code=404)
+    for f in verify_dir.iterdir():
+        if f.stem == doc_type:
+            return FileResponse(str(f))
+    return JSONResponse({"ok": False, "error": "File not found"}, status_code=404)
+
+
+# ─────────────────────────────────────────────
+# Referral Program
+# ─────────────────────────────────────────────
+
+@app.get("/api/referrals/stats")
+async def get_referral_stats():
+    stats = db.get_referral_stats()
+    return JSONResponse({"ok": True, **stats})
+
+
+@app.get("/api/referrals/user/{telegram_id}")
+async def get_user_referrals(telegram_id: int):
+    referrals = db.get_user_referrals(telegram_id)
+    return JSONResponse({"ok": True, "referrals": referrals})
+
+
+# ─────────────────────────────────────────────
+# Production Switch
+# ─────────────────────────────────────────────
+
+@app.get("/api/settings/payment-mode")
+async def get_payment_mode():
+    mode = db.get_setting("payment_mode", "test")
+    return JSONResponse({"ok": True, "mode": mode})
+
+
+@app.put("/api/settings/payment-mode")
+async def set_payment_mode(request: Request):
+    data = await request.json()
+    mode = data.get("mode", "test")
+    if mode not in ("test", "production"):
+        return JSONResponse({"ok": False, "error": "Mode must be test or production"}, status_code=400)
+    db.set_setting("payment_mode", mode)
+    return JSONResponse({"ok": True, "mode": mode})
+
+
 @app.get("/config", response_class=HTMLResponse)
 async def config_page(request: Request):
     api_keys = db.get_api_keys()
@@ -811,6 +1000,11 @@ async def config_page(request: Request):
     anthropic_raw = os.getenv("ANTHROPIC_API_KEY", "")
     openai_raw = os.getenv("OPENAI_API_KEY", "")
 
+    # Pricing & promotions
+    pricing_plans = db.get_all_pricing_plans()
+    promotions = db.get_all_promotions()
+    payment_mode = settings.get("payment_mode", "test")
+
     return templates.TemplateResponse("config.html", {
         "request": request,
         "active_page": "config",
@@ -822,6 +1016,9 @@ async def config_page(request: Request):
         "default_provider": default_provider,
         "default_model": default_model,
         "available_models": models,
+        "pricing_plans": pricing_plans,
+        "promotions": promotions,
+        "payment_mode": payment_mode,
     })
 
 

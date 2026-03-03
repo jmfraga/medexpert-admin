@@ -85,8 +85,14 @@ async def cmd_start(update, context):
             )
             return
         elif arg.startswith("ref_"):
-            # TODO: Process referral
-            pass
+            ref_code = arg[4:]  # Strip "ref_" prefix
+            result = db.process_referral(ref_code, user.id)
+            if result:
+                await update.message.reply_text(
+                    "¡Fuiste referido! Ambos recibirán beneficios cuando te suscribas."
+                )
+                logger.info(f"Referral processed: {ref_code} -> {user.id}")
+            # Continue to show welcome
 
     free_used = db.count_bot_free_queries(user.id, specialty)
     free_remaining = max(0, FREE_QUERY_LIMIT - free_used)
@@ -250,13 +256,93 @@ async def cmd_soporte(update, context):
 async def cmd_cancelar(update, context):
     """Handle /cancelar — cancel any pending action."""
     cancelled = False
-    for key in ("awaiting_support", "awaiting_email"):
+    for key in ("awaiting_support", "awaiting_email", "awaiting_verification"):
         if context.user_data.pop(key, None):
             cancelled = True
     if cancelled:
         await update.message.reply_text("Accion cancelada.")
     else:
         await update.message.reply_text("No hay ninguna accion pendiente.")
+
+
+async def cmd_verificar(update, context):
+    """Handle /verificar — start medical verification flow."""
+    user = update.effective_user
+    bot_user = db.get_bot_user(user.id)
+
+    if bot_user and bot_user.get("is_verified"):
+        await update.message.reply_text("Ya estás verificado como profesional de la salud.")
+        return
+
+    if bot_user and bot_user.get("verification_status") == "pending":
+        await update.message.reply_text(
+            "Tu verificación está en revisión.\n"
+            "Te notificaremos cuando sea aprobada."
+        )
+        return
+
+    context.user_data["awaiting_verification"] = "cedula"
+    await update.message.reply_text(
+        "<b>Verificación Médica</b>\n\n"
+        "Para verificar tu identidad como profesional de la salud, necesitamos:\n\n"
+        "1️⃣ <b>Cédula profesional</b> — foto legible\n"
+        "2️⃣ <b>INE/Identificación oficial</b> — foto legible\n\n"
+        "📷 Envía ahora la <b>foto de tu cédula profesional</b>.\n\n"
+        "<i>Tus documentos se almacenan de forma segura y solo serán revisados "
+        "por el equipo de MedExpert.</i>\n\n"
+        "Usa /cancelar para cancelar.",
+        parse_mode="HTML",
+    )
+
+
+async def handle_verification_photo(update, context):
+    """Handle photo upload during verification flow."""
+    step = context.user_data.get("awaiting_verification")
+    if not step:
+        return False  # Not in verification flow
+
+    user = update.effective_user
+    photo = update.message.photo[-1] if update.message.photo else None
+    document = update.message.document if not photo else None
+
+    if not photo and not document:
+        await update.message.reply_text("Por favor envía una foto o documento.")
+        return True
+
+    # Download file
+    if photo:
+        file = await context.bot.get_file(photo.file_id)
+    else:
+        file = await context.bot.get_file(document.file_id)
+
+    # Save to verification directory
+    verify_dir = Path(f"data/verifications/{user.id}")
+    verify_dir.mkdir(parents=True, exist_ok=True)
+    ext = ".jpg" if photo else (Path(document.file_name).suffix if document.file_name else ".pdf")
+    filepath = verify_dir / f"{step}{ext}"
+    await file.download_to_drive(str(filepath))
+
+    # Save to DB
+    db.create_verification_doc(user.id, step, str(filepath))
+
+    if step == "cedula":
+        context.user_data["awaiting_verification"] = "ine"
+        await update.message.reply_text(
+            "✅ Cédula recibida.\n\n"
+            "📷 Ahora envía la <b>foto de tu INE</b> (identificación oficial).",
+            parse_mode="HTML",
+        )
+    elif step == "ine":
+        context.user_data.pop("awaiting_verification", None)
+        # Update user status
+        db.update_bot_user(user.id, verification_status="pending")
+        await update.message.reply_text(
+            "✅ INE recibida.\n\n"
+            "Tus documentos están en revisión. Te notificaremos cuando sean aprobados.\n"
+            "Esto generalmente toma menos de 24 horas."
+        )
+        logger.info(f"Verification docs submitted by {user.id}")
+    return True
 
 
 async def cmd_suscribir(update, context):
@@ -322,16 +408,29 @@ async def cmd_suscribir(update, context):
     )
 
 
-PLAN_PRICES = {
-    "basic_monthly": {"usd": 14.99, "mxn": 299, "label": "Basico Mensual", "period": "mes"},
-    "basic_annual": {"usd": 149.90, "mxn": 2990, "label": "Basico Anual", "period": "año"},
-    "premium_monthly": {"usd": 24.99, "mxn": 499, "label": "Premium Mensual", "period": "mes"},
-    "premium_annual": {"usd": 249.90, "mxn": 4990, "label": "Premium Anual", "period": "año"},
-}
+def get_plan_prices():
+    """Load prices from DB, fallback to defaults."""
+    try:
+        prices = db.get_plan_prices_for_bot()
+        if prices:
+            return prices
+    except Exception:
+        pass
+    return {
+        "basic_monthly": {"usd": 14.99, "mxn": 299, "label": "Basico Mensual", "period": "mes"},
+        "basic_annual": {"usd": 149.90, "mxn": 2990, "label": "Basico Anual", "period": "año"},
+        "premium_monthly": {"usd": 24.99, "mxn": 499, "label": "Premium Mensual", "period": "mes"},
+        "premium_annual": {"usd": 249.90, "mxn": 4990, "label": "Premium Anual", "period": "año"},
+    }
+
+PLAN_PRICES = get_plan_prices()
 
 
 async def handle_subscribe_callback(update, context):
     """Handle subscription plan selection — show payment method options."""
+    global PLAN_PRICES
+    PLAN_PRICES = get_plan_prices()  # Reload from DB
+
     query = update.callback_query
     await query.answer()
 
@@ -1246,6 +1345,16 @@ def main():
     app.add_handler(CommandHandler("soporte", cmd_soporte))
     app.add_handler(CommandHandler("cancelar", cmd_cancelar))
     app.add_handler(CommandHandler("suscribir", cmd_suscribir))
+    app.add_handler(CommandHandler("verificar", cmd_verificar))
+
+    # Photo/document handler for verification flow
+    async def handle_photo_or_doc(update, context):
+        handled = await handle_verification_photo(update, context)
+        if not handled:
+            await update.message.reply_text(
+                "Envía un mensaje de texto o audio con tu consulta clínica."
+            )
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_photo_or_doc))
 
     # Message handlers (voice and text)
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
@@ -1273,6 +1382,7 @@ def main():
             BotCommand("ayuda", "Ver comandos disponibles"),
             BotCommand("estado", "Ver tu plan y consultas"),
             BotCommand("suscribir", "Ver planes de suscripcion"),
+            BotCommand("verificar", "Verificar cedula profesional"),
             BotCommand("soporte", "Contactar soporte"),
             BotCommand("terminos", "Terminos y condiciones"),
             BotCommand("cancelar", "Cancelar accion en curso"),
