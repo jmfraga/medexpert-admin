@@ -1285,6 +1285,54 @@ async def mercadopago_webhook(request: Request):
 
 
 # ─────────────────────────────────────────────
+# Clip Webhook
+# ─────────────────────────────────────────────
+
+@app.post("/api/clip/webhook")
+async def clip_webhook(request: Request):
+    """Handle Clip checkout webhook notifications."""
+    data = await request.json()
+    resource_status = data.get("resource_status", "")
+    me_reference_id = data.get("me_reference_id", "")
+    payment_request_id = data.get("payment_request_id", "")
+
+    logger.info(f"Clip webhook: status={resource_status}, ref={me_reference_id}, id={payment_request_id}")
+
+    if resource_status == "COMPLETED" and me_reference_id and "_" in me_reference_id:
+        parts = me_reference_id.split("_")
+        telegram_id = int(parts[0])
+        plan = parts[1]
+
+        db.update_bot_user_subscription(
+            telegram_id=telegram_id,
+            plan=plan,
+            status="active",
+            stripe_customer_id=f"clip_{payment_request_id}",
+        )
+        logger.info(f"Clip subscription activated: {telegram_id} -> {plan}")
+
+        # Notify user via Telegram
+        try:
+            import httpx
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+            if bot_token:
+                msg = (
+                    f"Pago con Clip recibido!\n\n"
+                    f"Tu plan <b>{plan.capitalize()}</b> ya esta activo.\n"
+                    "Usa /estado para ver los detalles."
+                )
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": telegram_id, "text": msg, "parse_mode": "HTML"},
+                    )
+        except Exception as e:
+            logger.error(f"Failed to notify user {telegram_id} about Clip payment: {e}")
+
+    return JSONResponse({"received": True})
+
+
+# ─────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────
 

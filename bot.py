@@ -427,7 +427,7 @@ PLAN_PRICES = get_plan_prices()
 
 
 async def handle_subscribe_callback(update, context):
-    """Handle subscription plan selection — show payment method options."""
+    """Handle subscription plan selection — ask country for smart payment routing."""
     global PLAN_PRICES
     PLAN_PRICES = get_plan_prices()  # Reload from DB
 
@@ -444,12 +444,70 @@ async def handle_subscribe_callback(update, context):
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     keyboard = [
         [InlineKeyboardButton(
-            f"Tarjeta (Stripe) - ${price_info['usd']:.2f} USD",
-            callback_data=f"pay_stripe_{plan_key}",
+            f"Mexico - ${price_info['mxn']:.0f} MXN",
+            callback_data=f"region_mx_{plan_key}",
         )],
         [InlineKeyboardButton(
-            f"Mercado Pago - ${price_info['mxn']} MXN",
+            f"Internacional - ${price_info['usd']:.2f} USD",
+            callback_data=f"region_intl_{plan_key}",
+        )],
+    ]
+
+    await query.message.reply_text(
+        f"<b>{price_info['label']}</b>\n\n"
+        "¿Desde donde nos contactas?",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_region_mx(update, context):
+    """Show Mexican payment methods: Mercado Pago + Clip."""
+    query = update.callback_query
+    await query.answer()
+
+    plan_key = query.data.replace("region_mx_", "")
+    price_info = PLAN_PRICES.get(plan_key)
+    if not price_info:
+        await query.message.reply_text("Plan no disponible.")
+        return
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [
+        [InlineKeyboardButton(
+            f"Mercado Pago - ${price_info['mxn']:.0f} MXN",
             callback_data=f"pay_mp_{plan_key}",
+        )],
+        [InlineKeyboardButton(
+            f"Clip (OXXO/Tarjeta) - ${price_info['mxn']:.0f} MXN",
+            callback_data=f"pay_clip_{plan_key}",
+        )],
+    ]
+
+    await query.message.reply_text(
+        f"<b>{price_info['label']} - ${price_info['mxn']:.0f} MXN/{price_info['period']}</b>\n\n"
+        "Selecciona tu metodo de pago:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_region_intl(update, context):
+    """Show international payment methods: Stripe + PayPal."""
+    query = update.callback_query
+    await query.answer()
+
+    plan_key = query.data.replace("region_intl_", "")
+    price_info = PLAN_PRICES.get(plan_key)
+    if not price_info:
+        await query.message.reply_text("Plan no disponible.")
+        return
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [
+        [InlineKeyboardButton(
+            f"Tarjeta (Stripe) - ${price_info['usd']:.2f} USD",
+            callback_data=f"pay_stripe_{plan_key}",
         )],
         [InlineKeyboardButton(
             f"PayPal - ${price_info['usd']:.2f} USD",
@@ -458,7 +516,7 @@ async def handle_subscribe_callback(update, context):
     ]
 
     await query.message.reply_text(
-        f"<b>{price_info['label']}</b>\n\n"
+        f"<b>{price_info['label']} - ${price_info['usd']:.2f} USD/{price_info['period']}</b>\n\n"
         "Selecciona tu metodo de pago:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -712,6 +770,87 @@ async def handle_pay_paypal(update, context):
     except Exception as e:
         logger.error(f"PayPal error: {e}")
         await query.message.reply_text("Error con PayPal. Intenta Stripe o Mercado Pago.")
+
+
+async def handle_pay_clip(update, context):
+    """Handle Clip payment — create checkout payment link (MXN)."""
+    import httpx
+    import base64
+
+    query = update.callback_query
+    await query.answer()
+
+    plan_key = query.data.replace("pay_clip_", "")  # e.g. "basic_monthly"
+    price_info = PLAN_PRICES.get(plan_key)
+    if not price_info:
+        await query.message.reply_text("Plan no disponible.")
+        return
+
+    clip_api_key = os.getenv("CLIP_API_KEY")
+    clip_api_secret = os.getenv("CLIP_API_SECRET")
+    if not clip_api_key or not clip_api_secret:
+        await query.message.reply_text(
+            "Clip no disponible temporalmente.\n"
+            "Intenta con Mercado Pago o Stripe."
+        )
+        return
+
+    user = query.from_user
+    plan_base = plan_key.split("_")[0]  # "basic" or "premium"
+    bot_username = (await context.bot.get_me()).username
+    credentials = base64.b64encode(f"{clip_api_key}:{clip_api_secret}".encode()).decode()
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.payclip.com/v2/checkout",
+                headers={
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "amount": float(price_info["mxn"]),
+                    "currency": "MXN",
+                    "purchase_description": f"MedExpert {price_info['label']}",
+                    "redirection_url": {
+                        "success": f"https://t.me/{bot_username}?start=payment_success",
+                        "error": f"https://t.me/{bot_username}?start=payment_cancel",
+                        "default": f"https://t.me/{bot_username}",
+                    },
+                    "metadata": {
+                        "external_reference": f"{user.id}_{plan_base}",
+                    },
+                    "custom_payment_options": {
+                        "payment_method_types": ["debit", "credit", "cash"],
+                    },
+                    "webhook_url": "https://api.medexpert.mx/api/clip/webhook",
+                },
+                timeout=15.0,
+            )
+
+        data = resp.json()
+        checkout_url = data.get("payment_request_url")
+
+        if not checkout_url:
+            await query.message.reply_text("Error creando pago con Clip. Contacta /soporte.")
+            logger.error(f"Clip checkout error: {data}")
+            return
+
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        keyboard = [[InlineKeyboardButton("Pagar con Clip", url=checkout_url)]]
+
+        await query.message.reply_text(
+            f"<b>Clip - {price_info['label']} (${price_info['mxn']:.0f} MXN/{price_info['period']})</b>\n\n"
+            "Haz clic para completar el pago:\n"
+            "(Tarjeta, OXXO)",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        logger.info(f"Clip checkout for {user.id} ({plan_key}): {data.get('payment_request_id')}")
+
+    except Exception as e:
+        logger.error(f"Clip error: {e}")
+        await query.message.reply_text("Error con Clip. Intenta Mercado Pago o Stripe.")
 
 
 async def handle_voice(update, context):
@@ -1367,9 +1506,12 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_feedback_prompt, pattern=r"^eval_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_feedback_response, pattern=r"^fb_[a-e]_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_subscribe_callback, pattern=r"^subscribe_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_region_mx, pattern=r"^region_mx_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_region_intl, pattern=r"^region_intl_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_stripe, pattern=r"^pay_stripe_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_mp, pattern=r"^pay_mp_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_paypal, pattern=r"^pay_paypal_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_pay_clip, pattern=r"^pay_clip_(basic|premium)_(monthly|annual)$"))
 
     # Error handler
     app.add_error_handler(handle_error)
