@@ -120,8 +120,8 @@ class BotBrain:
 
     def __init__(self, provider: str = None, model: str = None):
         settings = db.get_all_settings()
-        self.provider = provider or settings.get("default_provider", "anthropic")
-        self.model = model or settings.get("default_model", "claude-sonnet-4-20250514")
+        self.provider = provider or settings.get("default_provider", "groq")
+        self.model = model or settings.get("default_model", "openai/gpt-oss-120b")
         self.client = None
         self._init_client()
 
@@ -232,7 +232,7 @@ class BotBrain:
         )
 
         # Call LLM — allow longer responses, Telegram splitting handles length
-        result = self._call_llm(system, user_message, max_tokens=1500)
+        result = self._call_llm(system, user_message, max_tokens=2000)
 
         # Fallback to Anthropic if primary fails
         if result["status"] == "error" and self.provider != "anthropic":
@@ -277,7 +277,8 @@ class BotBrain:
         """Deepen a previous response with a more powerful model.
 
         Tiers:
-          - "free" / "basic": GPT-OSS 120B via Groq (~3s, no cost)
+          - "free": GPT-OSS 120B via Groq (~3s, no cost)
+          - "basic": Claude Sonnet via Anthropic (~5s, low cost)
           - "premium": Claude Opus 4.6 (~30s, highest quality)
         """
         start = time.time()
@@ -289,6 +290,12 @@ class BotBrain:
             deepen_provider = "anthropic"
             deepen_model = "claude-opus-4-6"
             max_tokens = 3000
+        elif tier == "basic":
+            from anthropic import Anthropic
+            client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+            deepen_provider = "anthropic"
+            deepen_model = "claude-sonnet-4-20250514"
+            max_tokens = 2500
         else:
             from openai import OpenAI
             client = OpenAI(

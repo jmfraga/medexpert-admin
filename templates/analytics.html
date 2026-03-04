@@ -1,0 +1,564 @@
+{% extends "base.html" %}
+{% block title %}Analytics - MedExpert Admin{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .analytics-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 28px 0;
+    }
+    .analytics-header h1 { font-size: 1.2em; color: #f59e0b; font-weight: 600; }
+
+    .range-btns { display: flex; gap: 6px; }
+    .range-btn {
+        padding: 5px 14px; border-radius: 6px; border: 1px solid #2a3050;
+        background: #1a2040; color: #94a3b8; font-size: 0.78em; cursor: pointer;
+        transition: all 0.2s;
+    }
+    .range-btn:hover { background: #253060; color: #e0e6ed; }
+    .range-btn.active { background: #92400e; color: #f59e0b; border-color: #b45309; }
+
+    .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 12px;
+        padding: 16px 28px;
+    }
+    .kpi-card {
+        background: #111827; border: 1px solid #1e293b; border-radius: 10px;
+        padding: 16px; text-align: center;
+    }
+    .kpi-card .kpi-value { font-size: 1.6em; font-weight: 700; color: #f59e0b; }
+    .kpi-card .kpi-label { font-size: 0.72em; color: #64748b; margin-top: 4px; }
+    .kpi-card .kpi-sub { font-size: 0.68em; color: #475569; margin-top: 2px; }
+
+    .charts-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+        padding: 0 28px 16px;
+    }
+    .chart-card {
+        background: #111827; border: 1px solid #1e293b; border-radius: 10px;
+        padding: 16px;
+    }
+    .chart-card h3 {
+        font-size: 0.82em; color: #94a3b8; margin-bottom: 12px; font-weight: 500;
+    }
+    .chart-card canvas { max-height: 260px; }
+
+    .section-title {
+        font-size: 0.95em; color: #f59e0b; font-weight: 600;
+        padding: 16px 28px 8px;
+        border-top: 1px solid #1e293b;
+        margin-top: 8px;
+    }
+
+    .tables-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+        padding: 0 28px 28px;
+    }
+    .data-table {
+        background: #111827; border: 1px solid #1e293b; border-radius: 10px;
+        padding: 16px; overflow-x: auto;
+    }
+    .data-table h3 {
+        font-size: 0.82em; color: #94a3b8; margin-bottom: 10px; font-weight: 500;
+    }
+    .data-table table { width: 100%; border-collapse: collapse; font-size: 0.8em; }
+    .data-table th {
+        text-align: left; padding: 6px 10px; color: #64748b; font-weight: 600;
+        border-bottom: 1px solid #1e293b; font-size: 0.9em;
+    }
+    .data-table td { padding: 6px 10px; color: #e0e6ed; border-bottom: 1px solid #0f172a; }
+    .data-table tr:hover td { background: rgba(245, 158, 11, 0.04); }
+
+    .bar-inline {
+        display: inline-block; height: 6px; border-radius: 3px;
+        background: #f59e0b; vertical-align: middle; margin-left: 8px;
+    }
+    .feedback-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; }
+    .feedback-legend span { font-size: 0.7em; color: #64748b; display: flex; align-items: center; gap: 4px; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+    .loading-overlay {
+        position: fixed; top: 0; left: 200px; right: 0; bottom: 0;
+        background: rgba(10, 14, 26, 0.85); z-index: 300;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 0.9em; color: #64748b;
+    }
+    .loading-overlay.hidden { display: none; }
+
+    @media (max-width: 900px) {
+        .charts-grid, .tables-grid { grid-template-columns: 1fr; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="loadingOverlay" class="loading-overlay">Cargando datos...</div>
+
+<div class="analytics-header">
+    <h1>Analytics</h1>
+    <div class="range-btns">
+        <button class="range-btn" data-range="7d">7 dias</button>
+        <button class="range-btn active" data-range="30d">30 dias</button>
+        <button class="range-btn" data-range="90d">90 dias</button>
+        <button class="range-btn" data-range="all">Todo</button>
+    </div>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiTotalQueries">-</div>
+        <div class="kpi-label">Total consultas</div>
+        <div class="kpi-sub" id="kpiTodayQueries">Hoy: -</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiAvgResponse">-</div>
+        <div class="kpi-label">Tiempo resp. promedio</div>
+        <div class="kpi-sub">segundos</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiActiveUsers">-</div>
+        <div class="kpi-label">Usuarios activos 7d</div>
+        <div class="kpi-sub" id="kpiActive30d">30d: -</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiConversion">-</div>
+        <div class="kpi-label">Tasa conversion</div>
+        <div class="kpi-sub" id="kpiPaidUsers">- pagados / - total</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiTopModel">-</div>
+        <div class="kpi-label">Modelo mas usado</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiFeedback">-</div>
+        <div class="kpi-label">Utilidad percibida</div>
+        <div class="kpi-sub" id="kpiFeedbackCount">- evaluaciones</div>
+    </div>
+</div>
+
+<!-- Usage Charts -->
+<div class="section-title">Uso del servicio</div>
+<div class="charts-grid">
+    <div class="chart-card">
+        <h3>Consultas por dia</h3>
+        <canvas id="chartQueriesDay"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Registros de usuarios</h3>
+        <canvas id="chartRegistrations"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Voz vs Texto</h3>
+        <canvas id="chartVoiceText"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Tiempo de respuesta promedio (s)</h3>
+        <canvas id="chartResponseTime"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Uso de tokens (input / output)</h3>
+        <canvas id="chartTokens"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Horas mas activas</h3>
+        <canvas id="chartHours"></canvas>
+    </div>
+</div>
+
+<!-- Clinical Stats -->
+<div class="section-title">Estadisticas clinicas</div>
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiDeepeningRate">-</div>
+        <div class="kpi-label">Tasa de profundizacion</div>
+        <div class="kpi-sub" id="kpiDeepeningCount">- profundizaciones</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiRagCoverage">-</div>
+        <div class="kpi-label">Cobertura RAG</div>
+        <div class="kpi-sub" id="kpiAvgChunks">- chunks promedio</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiFreeVsPaid">-</div>
+        <div class="kpi-label">Consultas gratuitas</div>
+        <div class="kpi-sub" id="kpiPaidQueries">- de pago</div>
+    </div>
+</div>
+
+<div class="charts-grid">
+    <div class="chart-card">
+        <h3>Tendencia de profundizaciones</h3>
+        <canvas id="chartDeepening"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Feedback: utilidad percibida por dia</h3>
+        <canvas id="chartFeedbackDay"></canvas>
+        <div class="feedback-legend">
+            <span><span class="legend-dot" style="background:#22c55e"></span> Util / Muy util</span>
+            <span><span class="legend-dot" style="background:#f59e0b"></span> Parcial</span>
+            <span><span class="legend-dot" style="background:#ef4444"></span> No util / Incorrecto</span>
+        </div>
+    </div>
+</div>
+
+<!-- API Costs -->
+<div class="section-title">Costos de API</div>
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiTotalCost">-</div>
+        <div class="kpi-label">Costo total estimado</div>
+        <div class="kpi-sub">USD</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiAvgCostQuery">-</div>
+        <div class="kpi-label">Costo por consulta</div>
+        <div class="kpi-sub">USD promedio</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiTotalTokens">-</div>
+        <div class="kpi-label">Total tokens</div>
+    </div>
+</div>
+<div class="charts-grid">
+    <div class="chart-card">
+        <h3>Costo estimado por dia (USD)</h3>
+        <canvas id="chartCostDay"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Costo por modelo</h3>
+        <canvas id="chartCostModel"></canvas>
+    </div>
+</div>
+
+<!-- Diagnosis-Deepening Correlation -->
+<div class="section-title">Diagnostico y profundizacion</div>
+<div class="tables-grid">
+    <div class="data-table">
+        <h3>Tasa de profundizacion por especialidad</h3>
+        <table>
+            <thead><tr><th>Especialidad</th><th>Total</th><th>Profundizadas</th><th>Tasa</th></tr></thead>
+            <tbody id="tableDeepenSpecialty"></tbody>
+        </table>
+    </div>
+    <div class="data-table">
+        <h3>Consultas mas profundizadas</h3>
+        <table>
+            <thead><tr><th>Consulta</th><th>Veces</th></tr></thead>
+            <tbody id="tableTopDeepened"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Tables -->
+<div class="section-title">Distribucion detallada</div>
+<div class="tables-grid">
+    <div class="data-table">
+        <h3>Uso de guias por sociedad</h3>
+        <table>
+            <thead><tr><th>Sociedad</th><th>Citas</th><th></th></tr></thead>
+            <tbody id="tableGuidelines"></tbody>
+        </table>
+    </div>
+    <div class="data-table">
+        <h3>Costos por modelo LLM</h3>
+        <table>
+            <thead><tr><th>Modelo</th><th>Consultas</th><th>Tokens</th><th>Costo USD</th></tr></thead>
+            <tbody id="tableModelCosts"></tbody>
+        </table>
+    </div>
+    <div class="data-table">
+        <h3>Especialidades consultadas</h3>
+        <table>
+            <thead><tr><th>Especialidad</th><th>Consultas</th><th></th></tr></thead>
+            <tbody id="tableSpecialties"></tbody>
+        </table>
+    </div>
+    <div class="data-table">
+        <h3>Distribucion de feedback</h3>
+        <table>
+            <thead><tr><th>Respuesta</th><th>Cantidad</th><th></th></tr></thead>
+            <tbody id="tableFeedback"></tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+const AMBER = '#f59e0b';
+const AMBER_50 = 'rgba(245,158,11,0.15)';
+const BLUE = '#3b82f6';
+const BLUE_50 = 'rgba(59,130,246,0.15)';
+const GREEN = '#22c55e';
+const GREEN_50 = 'rgba(34,197,94,0.15)';
+const RED = '#ef4444';
+const GRAY = '#64748b';
+
+const chartDefaults = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+        legend: { display: false },
+    },
+    scales: {
+        x: { ticks: { color: '#475569', font: { size: 10 } }, grid: { color: '#1e293b' } },
+        y: { ticks: { color: '#475569', font: { size: 10 } }, grid: { color: '#1e293b' }, beginAtZero: true },
+    },
+};
+
+let charts = {};
+
+function createChart(id, type, data, options = {}) {
+    if (charts[id]) charts[id].destroy();
+    const ctx = document.getElementById(id).getContext('2d');
+    const merged = JSON.parse(JSON.stringify(chartDefaults));
+    Object.assign(merged, options);
+    if (options.plugins) Object.assign(merged.plugins, options.plugins);
+    if (options.scales) {
+        for (const k in options.scales) merged.scales[k] = { ...merged.scales[k], ...options.scales[k] };
+    }
+    charts[id] = new Chart(ctx, { type, data, options: merged });
+}
+
+function fmtDay(d) {
+    if (!d) return '';
+    const parts = d.split('-');
+    return parts[2] + '/' + parts[1];
+}
+
+function renderBarPercent(val, max) {
+    const pct = max > 0 ? (val / max * 100) : 0;
+    return `<span class="bar-inline" style="width:${Math.max(pct, 2)}%"></span>`;
+}
+
+const feedbackLabels = {
+    'Mejoró mi manera de ver las cosas': 'Mejoro perspectiva',
+    'Reforzó mi plan': 'Reforzo plan',
+    'Información incorrecta': 'Info incorrecta',
+    'Información incompleta': 'Info incompleta',
+    'No me sirvió (otra razón)': 'No sirvio',
+};
+
+function loadData(range) {
+    document.getElementById('loadingOverlay').classList.remove('hidden');
+
+    apiCall(`/api/analytics/data?range=${range}`).then(d => {
+        const k = d.kpis;
+
+        // KPIs
+        document.getElementById('kpiTotalQueries').textContent = k.total_queries.toLocaleString();
+        document.getElementById('kpiTodayQueries').textContent = `Hoy: ${k.today_queries}`;
+        document.getElementById('kpiAvgResponse').textContent = k.avg_response_time + 's';
+        document.getElementById('kpiActiveUsers').textContent = k.active_users_7d;
+        document.getElementById('kpiActive30d').textContent = `30d: ${k.active_users_30d}`;
+        document.getElementById('kpiConversion').textContent = k.conversion_rate + '%';
+        document.getElementById('kpiPaidUsers').textContent = `${k.paid_users} pagados / ${k.total_users} total`;
+        document.getElementById('kpiTopModel').textContent = k.top_model;
+        document.getElementById('kpiFeedback').textContent = k.feedback_score + '%';
+        document.getElementById('kpiFeedbackCount').textContent = `${k.feedback_total} evaluaciones`;
+
+        // Clinical KPIs
+        const cl = d.clinical;
+        document.getElementById('kpiDeepeningRate').textContent = cl.deepening_rate + '%';
+        document.getElementById('kpiDeepeningCount').textContent = `${cl.deepening_count} profundizaciones`;
+        document.getElementById('kpiRagCoverage').textContent = cl.rag_coverage + '%';
+        document.getElementById('kpiAvgChunks').textContent = `${cl.avg_rag_chunks} chunks promedio`;
+        document.getElementById('kpiFreeVsPaid').textContent = cl.free_queries.toLocaleString();
+        document.getElementById('kpiPaidQueries').textContent = `${cl.paid_queries.toLocaleString()} de pago`;
+
+        // Chart: Queries per day
+        const ts = d.time_series;
+        createChart('chartQueriesDay', 'line', {
+            labels: ts.queries_per_day.map(r => fmtDay(r.day)),
+            datasets: [{
+                data: ts.queries_per_day.map(r => r.count),
+                borderColor: AMBER, backgroundColor: AMBER_50,
+                fill: true, tension: 0.3, pointRadius: 2,
+            }],
+        });
+
+        // Chart: Registrations
+        createChart('chartRegistrations', 'bar', {
+            labels: ts.registrations_per_day.map(r => fmtDay(r.day)),
+            datasets: [{
+                data: ts.registrations_per_day.map(r => r.count),
+                backgroundColor: AMBER, borderRadius: 4,
+            }],
+        });
+
+        // Chart: Voice vs Text (doughnut)
+        const vt = d.distributions.voice_vs_text;
+        createChart('chartVoiceText', 'doughnut', {
+            labels: ['Voz', 'Texto'],
+            datasets: [{
+                data: [vt.voice, vt.text],
+                backgroundColor: [AMBER, BLUE],
+                borderWidth: 0,
+            }],
+        }, {
+            scales: {},
+            plugins: {
+                legend: { display: true, position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 } } },
+            },
+        });
+
+        // Chart: Response time
+        createChart('chartResponseTime', 'line', {
+            labels: ts.response_time_trend.map(r => fmtDay(r.day)),
+            datasets: [{
+                data: ts.response_time_trend.map(r => r.avg_rt),
+                borderColor: GREEN, backgroundColor: GREEN_50,
+                fill: true, tension: 0.3, pointRadius: 2,
+            }],
+        });
+
+        // Chart: Tokens
+        createChart('chartTokens', 'bar', {
+            labels: ts.tokens_per_day.map(r => fmtDay(r.day)),
+            datasets: [
+                { label: 'Input', data: ts.tokens_per_day.map(r => r.tokens_in), backgroundColor: AMBER, borderRadius: 3 },
+                { label: 'Output', data: ts.tokens_per_day.map(r => r.tokens_out), backgroundColor: BLUE, borderRadius: 3 },
+            ],
+        }, {
+            scales: { x: { stacked: true }, y: { stacked: true } },
+            plugins: { legend: { display: true, position: 'top', labels: { color: '#94a3b8', font: { size: 10 } } } },
+        });
+
+        // Chart: Busiest hours
+        const hoursData = Array(24).fill(0);
+        d.distributions.busiest_hours.forEach(r => { hoursData[r.hour] = r.count; });
+        createChart('chartHours', 'bar', {
+            labels: Array.from({ length: 24 }, (_, i) => i + ':00'),
+            datasets: [{
+                data: hoursData,
+                backgroundColor: hoursData.map((v, i) => i >= 8 && i <= 20 ? AMBER : GRAY),
+                borderRadius: 3,
+            }],
+        });
+
+        // Chart: Deepening trend
+        createChart('chartDeepening', 'line', {
+            labels: d.feedback.deepening_per_day.map(r => fmtDay(r.day)),
+            datasets: [{
+                data: d.feedback.deepening_per_day.map(r => r.count),
+                borderColor: BLUE, backgroundColor: BLUE_50,
+                fill: true, tension: 0.3, pointRadius: 2,
+            }],
+        });
+
+        // Chart: Feedback by day (stacked)
+        createChart('chartFeedbackDay', 'bar', {
+            labels: d.feedback.by_day.map(r => fmtDay(r.day)),
+            datasets: [
+                { label: 'Positivo', data: d.feedback.by_day.map(r => r.positive), backgroundColor: GREEN, borderRadius: 2 },
+                { label: 'Parcial', data: d.feedback.by_day.map(r => r.neutral), backgroundColor: AMBER, borderRadius: 2 },
+                { label: 'Negativo', data: d.feedback.by_day.map(r => r.negative), backgroundColor: RED, borderRadius: 2 },
+            ],
+        }, {
+            scales: { x: { stacked: true }, y: { stacked: true } },
+        });
+
+        // API Cost KPIs
+        const api = d.api_usage;
+        document.getElementById('kpiTotalCost').textContent = '$' + api.total_cost_usd.toFixed(2);
+        document.getElementById('kpiAvgCostQuery').textContent = '$' + api.avg_cost_per_query.toFixed(4);
+        document.getElementById('kpiTotalTokens').textContent = api.total_tokens.toLocaleString();
+
+        // Chart: Cost per day
+        createChart('chartCostDay', 'line', {
+            labels: api.cost_trend.map(r => fmtDay(r.day)),
+            datasets: [{
+                data: api.cost_trend.map(r => r.cost),
+                borderColor: RED, backgroundColor: 'rgba(239,68,68,0.15)',
+                fill: true, tension: 0.3, pointRadius: 2,
+            }],
+        }, { scales: { y: { ticks: { callback: v => '$' + v.toFixed(2) } } } });
+
+        // Chart: Cost by model (doughnut)
+        const modelColors = [AMBER, BLUE, GREEN, RED, GRAY];
+        createChart('chartCostModel', 'doughnut', {
+            labels: api.by_model.map(r => r.model),
+            datasets: [{
+                data: api.by_model.map(r => r.cost_usd),
+                backgroundColor: api.by_model.map((_, i) => modelColors[i % modelColors.length]),
+                borderWidth: 0,
+            }],
+        }, {
+            scales: {},
+            plugins: {
+                legend: { display: true, position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 } } },
+            },
+        });
+
+        // Table: Model costs
+        document.getElementById('tableModelCosts').innerHTML = api.by_model
+            .map(r => `<tr><td>${r.model}</td><td>${r.queries}</td><td>${(r.tokens_input + r.tokens_output).toLocaleString()}</td><td>$${r.cost_usd.toFixed(4)}</td></tr>`)
+            .join('');
+
+        // Table: Deepening by specialty
+        const dbs = cl.deepen_by_specialty || [];
+        document.getElementById('tableDeepenSpecialty').innerHTML = dbs
+            .map(r => `<tr><td>${r.specialty}</td><td>${r.total}</td><td>${r.deepened}</td><td>${r.deepening_rate}%</td></tr>`)
+            .join('');
+
+        // Table: Top deepened queries
+        const tdq = cl.top_deepened_queries || [];
+        document.getElementById('tableTopDeepened').innerHTML = tdq
+            .map(r => `<tr><td style="font-size:0.78em">${r.query_text}</td><td>${r.times_deepened}</td></tr>`)
+            .join('') || '<tr><td colspan="2" style="color:#475569">Sin datos</td></tr>';
+
+        // Table: Guidelines
+        const gs = d.distributions.guideline_societies;
+        const gsMax = Math.max(...Object.values(gs), 1);
+        document.getElementById('tableGuidelines').innerHTML = Object.entries(gs)
+            .sort((a, b) => b[1] - a[1])
+            .map(([name, count]) =>
+                `<tr><td>${name}</td><td>${count}</td><td>${renderBarPercent(count, gsMax)}</td></tr>`
+            ).join('');
+
+        // Table: Specialties
+        const spMax = cl.specialty_distribution.length > 0
+            ? Math.max(...cl.specialty_distribution.map(r => r.count), 1) : 1;
+        document.getElementById('tableSpecialties').innerHTML = cl.specialty_distribution
+            .map(r => `<tr><td>${r.specialty}</td><td>${r.count}</td><td>${renderBarPercent(r.count, spMax)}</td></tr>`)
+            .join('');
+
+        // Table: Feedback distribution
+        const fb = d.feedback.distribution;
+        const fbMax = Math.max(...Object.values(fb), 1);
+        document.getElementById('tableFeedback').innerHTML = Object.entries(fb)
+            .sort((a, b) => b[1] - a[1])
+            .map(([key, count]) =>
+                `<tr><td>${feedbackLabels[key] || key}</td><td>${count}</td><td>${renderBarPercent(count, fbMax)}</td></tr>`
+            ).join('');
+
+        document.getElementById('loadingOverlay').classList.add('hidden');
+    }).catch(err => {
+        console.error('Analytics error:', err);
+        document.getElementById('loadingOverlay').textContent = 'Error cargando datos';
+    });
+}
+
+// Range button handlers
+document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        loadData(btn.dataset.range);
+    });
+});
+
+// Initial load
+loadData('30d');
+</script>
+{% endblock %}

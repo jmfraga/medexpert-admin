@@ -1222,17 +1222,29 @@ async def handle_deepen_callback(update, context):
     user_plan = db.get_bot_user_plan(user_id)
 
     if user_plan == "premium":
-        # Premium: Opus, max 1/day
+        # Premium (Plus): Opus, max 3/day
         opus_today = db.count_bot_opus_deepenings_today(user_id, specialty)
-        if opus_today >= 1:
+        if opus_today >= 3:
             await query.message.reply_text(
-                "Ya usaste tu profundizacion premium (Opus) de hoy.\n"
-                "Se renueva manana. Puedes seguir consultando normalmente."
+                "Ya usaste tus 3 profundizaciones premium (Opus) de hoy.\n"
+                "Se renuevan manana. Puedes seguir consultando normalmente."
             )
             return
         tier = "premium"
+    elif user_plan == "basic":
+        # Basic: Sonnet, max 5/day
+        sonnet_today = db.count_bot_sonnet_deepenings_today(user_id, specialty)
+        if sonnet_today >= 5:
+            await query.message.reply_text(
+                "Ya usaste tus 5 profundizaciones de hoy.\n"
+                "Se renuevan manana.\n\n"
+                "Plan Plus ($24.99 USD/mes): profundizar con Claude Opus\n"
+                "/suscribir para cambiar de plan"
+            )
+            return
+        tier = "basic"
     else:
-        # Free / Basic: GPT-OSS 120B
+        # Free: GPT-OSS 120B
         tier = "free"
 
     # Free tier: deepening counts as a query
@@ -1244,14 +1256,15 @@ async def handle_deepen_callback(update, context):
             await query.message.reply_text(
                 "No tienes consultas gratis restantes.\n"
                 "Profundizar consume 1 consulta.\n\n"
-                "Plan Basico ($14.99 USD/mes): consultas ilimitadas + profundizar con GPT-OSS 120B\n"
-                "Plan Premium ($24.99 USD/mes): todo + profundizar con Claude Opus 4.6\n\n"
+                "Plan Basico ($14.99 USD/mes): consultas ilimitadas + profundizar con Claude Sonnet\n"
+                "Plan Premium ($24.99 USD/mes): todo + profundizar con Claude Opus\n\n"
                 "/suscribir para activar"
             )
             return
 
     # Show processing message
-    model_label = "Claude Opus 4.6" if tier == "premium" else "GPT-OSS 120B"
+    model_labels = {"premium": "Claude Opus 4.6", "basic": "Claude Sonnet", "free": "GPT-OSS 120B"}
+    model_label = model_labels.get(tier, "GPT-OSS 120B")
     processing_msg = await query.message.reply_text(
         f"Profundizando con {model_label}..."
     )

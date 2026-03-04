@@ -1528,6 +1528,26 @@ async def send_congress_alerts():
 
 
 # ─────────────────────────────────────────────
+# Analytics
+# ─────────────────────────────────────────────
+
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request):
+    return templates.TemplateResponse("analytics.html", {
+        "request": request,
+        "active_page": "analytics",
+    })
+
+
+@app.get("/api/analytics/data")
+async def analytics_data(range: str = "30d"):
+    days_map = {"7d": 7, "30d": 30, "90d": 90, "all": None}
+    days = days_map.get(range, 30)
+    data = db.get_analytics_data(days)
+    return JSONResponse(data)
+
+
+# ─────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────
 

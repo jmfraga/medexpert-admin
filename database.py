@@ -1166,6 +1166,19 @@ def count_bot_opus_deepenings_today(telegram_id: int, specialty: str) -> int:
     return row["cnt"] if row else 0
 
 
+def count_bot_sonnet_deepenings_today(telegram_id: int, specialty: str) -> int:
+    """Count Sonnet (basic) deepenings today for a user."""
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT COUNT(*) as cnt FROM bot_consultations
+        WHERE telegram_id = ? AND specialty = ? AND is_deepening = 1
+        AND llm_model = 'claude-sonnet-4-20250514'
+        AND date(created_at) = date('now')
+    """, (telegram_id, specialty)).fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
 def log_bot_consultation(telegram_id: int, specialty: str, query_type: str,
                          query_text: str = "", response_text: str = "",
                          response_time_seconds: float = 0,
@@ -1235,6 +1248,355 @@ def get_bot_stats() -> dict:
             "today_queries": today_queries,
             "deepenings": deepenings,
             "feedback_count": feedback_count,
+        }
+    finally:
+        conn.close()
+
+
+def get_analytics_data(days: int | None = 30) -> dict:
+    """Get comprehensive analytics data for the analytics dashboard.
+
+    Args:
+        days: Number of days to look back (7, 30, 90, or None for all time)
+
+    Returns:
+        Dict with kpis, time_series, distributions, clinical, and feedback sections
+    """
+    import json as _json
+    conn = get_connection()
+    try:
+        date_filter = ""
+        date_filter_users = ""
+        if days:
+            date_filter = f"AND bc.created_at >= datetime('now', '-{days} days')"
+            date_filter_users = f"AND bu.created_at >= datetime('now', '-{days} days')"
+
+        # ── KPIs ──
+        total_queries = conn.execute(f"""
+            SELECT COUNT(*) as cnt FROM bot_consultations bc WHERE 1=1 {date_filter}
+        """).fetchone()["cnt"]
+
+        today_queries = conn.execute("""
+            SELECT COUNT(*) as cnt FROM bot_consultations
+            WHERE date(created_at) = date('now')
+        """).fetchone()["cnt"]
+
+        avg_response = conn.execute(f"""
+            SELECT COALESCE(AVG(bc.response_time_seconds), 0) as avg_rt
+            FROM bot_consultations bc WHERE bc.response_time_seconds > 0 {date_filter}
+        """).fetchone()["avg_rt"]
+
+        active_7d = conn.execute("""
+            SELECT COUNT(*) as cnt FROM bot_users
+            WHERE last_activity >= datetime('now', '-7 days')
+        """).fetchone()["cnt"]
+
+        active_30d = conn.execute("""
+            SELECT COUNT(*) as cnt FROM bot_users
+            WHERE last_activity >= datetime('now', '-30 days')
+        """).fetchone()["cnt"]
+
+        total_users = conn.execute("SELECT COUNT(*) as cnt FROM bot_users").fetchone()["cnt"]
+        paid_users = conn.execute(
+            "SELECT COUNT(*) as cnt FROM bot_users WHERE subscription_status = 'active'"
+        ).fetchone()["cnt"]
+        conversion_rate = round((paid_users / total_users * 100) if total_users > 0 else 0, 1)
+
+        top_model_row = conn.execute(f"""
+            SELECT bc.llm_model, COUNT(*) as cnt FROM bot_consultations bc
+            WHERE bc.llm_model != '' {date_filter}
+            GROUP BY bc.llm_model ORDER BY cnt DESC LIMIT 1
+        """).fetchone()
+        top_model = top_model_row["llm_model"] if top_model_row else "N/A"
+
+        feedback_rows = conn.execute(f"""
+            SELECT bc.user_feedback, COUNT(*) as cnt FROM bot_consultations bc
+            WHERE bc.user_feedback IS NOT NULL {date_filter}
+            GROUP BY bc.user_feedback
+        """).fetchall()
+        feedback_total = sum(r["cnt"] for r in feedback_rows)
+        feedback_dist = {r["user_feedback"]: r["cnt"] for r in feedback_rows}
+        # Positive: "Mejoró mi manera de ver las cosas", "Reforzó mi plan"
+        _POSITIVE = {"Mejoró mi manera de ver las cosas", "Reforzó mi plan"}
+        positive_fb = sum(v for k, v in feedback_dist.items() if k in _POSITIVE)
+        feedback_score = round((positive_fb / feedback_total * 100) if feedback_total > 0 else 0, 1)
+
+        kpis = {
+            "total_queries": total_queries,
+            "today_queries": today_queries,
+            "avg_response_time": round(avg_response, 1),
+            "active_users_7d": active_7d,
+            "active_users_30d": active_30d,
+            "total_users": total_users,
+            "paid_users": paid_users,
+            "conversion_rate": conversion_rate,
+            "top_model": top_model,
+            "feedback_score": feedback_score,
+            "feedback_total": feedback_total,
+        }
+
+        # ── Time Series ──
+        queries_per_day = [dict(r) for r in conn.execute(f"""
+            SELECT date(bc.created_at) as day, COUNT(*) as count
+            FROM bot_consultations bc WHERE 1=1 {date_filter}
+            GROUP BY day ORDER BY day
+        """).fetchall()]
+
+        registrations_per_day = [dict(r) for r in conn.execute(f"""
+            SELECT date(bu.created_at) as day, COUNT(*) as count
+            FROM bot_users bu WHERE 1=1 {date_filter_users}
+            GROUP BY day ORDER BY day
+        """).fetchall()]
+
+        response_time_trend = [dict(r) for r in conn.execute(f"""
+            SELECT date(bc.created_at) as day,
+                   ROUND(AVG(bc.response_time_seconds), 1) as avg_rt
+            FROM bot_consultations bc
+            WHERE bc.response_time_seconds > 0 {date_filter}
+            GROUP BY day ORDER BY day
+        """).fetchall()]
+
+        tokens_per_day = [dict(r) for r in conn.execute(f"""
+            SELECT date(bc.created_at) as day,
+                   SUM(bc.tokens_input) as tokens_in,
+                   SUM(bc.tokens_output) as tokens_out
+            FROM bot_consultations bc WHERE 1=1 {date_filter}
+            GROUP BY day ORDER BY day
+        """).fetchall()]
+
+        time_series = {
+            "queries_per_day": queries_per_day,
+            "registrations_per_day": registrations_per_day,
+            "response_time_trend": response_time_trend,
+            "tokens_per_day": tokens_per_day,
+        }
+
+        # ── Distributions ──
+        voice_count = conn.execute(f"""
+            SELECT COUNT(*) as cnt FROM bot_consultations bc
+            WHERE bc.query_type = 'voice' {date_filter}
+        """).fetchone()["cnt"]
+        text_count = conn.execute(f"""
+            SELECT COUNT(*) as cnt FROM bot_consultations bc
+            WHERE bc.query_type = 'text' {date_filter}
+        """).fetchone()["cnt"]
+
+        busiest_hours = [dict(r) for r in conn.execute(f"""
+            SELECT CAST(strftime('%H', bc.created_at) AS INTEGER) as hour, COUNT(*) as count
+            FROM bot_consultations bc WHERE 1=1 {date_filter}
+            GROUP BY hour ORDER BY hour
+        """).fetchall()]
+
+        # Guideline society usage from citations_json
+        all_citations = conn.execute(f"""
+            SELECT bc.citations_json FROM bot_consultations bc
+            WHERE bc.citations_json != '[]' AND bc.citations_json IS NOT NULL {date_filter}
+        """).fetchall()
+        society_counts = {"NCCN": 0, "ESMO": 0, "IMSS": 0, "NCI": 0, "Otro": 0}
+        for row in all_citations:
+            try:
+                cites = _json.loads(row["citations_json"])
+                for cite in cites:
+                    cite_upper = cite.upper() if isinstance(cite, str) else str(cite).upper()
+                    if "NCCN" in cite_upper:
+                        society_counts["NCCN"] += 1
+                    elif "ESMO" in cite_upper:
+                        society_counts["ESMO"] += 1
+                    elif "IMSS" in cite_upper or "GPC" in cite_upper:
+                        society_counts["IMSS"] += 1
+                    elif "NCI" in cite_upper or "PDQ" in cite_upper:
+                        society_counts["NCI"] += 1
+                    else:
+                        society_counts["Otro"] += 1
+            except (_json.JSONDecodeError, TypeError):
+                pass
+
+        model_dist = [dict(r) for r in conn.execute(f"""
+            SELECT bc.llm_model as model, COUNT(*) as count
+            FROM bot_consultations bc
+            WHERE bc.llm_model != '' {date_filter}
+            GROUP BY bc.llm_model ORDER BY count DESC
+        """).fetchall()]
+
+        distributions = {
+            "voice_vs_text": {"voice": voice_count, "text": text_count},
+            "busiest_hours": busiest_hours,
+            "guideline_societies": society_counts,
+            "model_distribution": model_dist,
+        }
+
+        # ── Clinical Stats ──
+        specialty_dist = [dict(r) for r in conn.execute(f"""
+            SELECT bc.specialty, COUNT(*) as count
+            FROM bot_consultations bc WHERE 1=1 {date_filter}
+            GROUP BY bc.specialty ORDER BY count DESC
+        """).fetchall()]
+
+        deepening_count = conn.execute(f"""
+            SELECT COUNT(*) as cnt FROM bot_consultations bc
+            WHERE bc.is_deepening = 1 {date_filter}
+        """).fetchone()["cnt"]
+        deepening_rate = round((deepening_count / total_queries * 100) if total_queries > 0 else 0, 1)
+
+        rag_usage = conn.execute(f"""
+            SELECT COALESCE(AVG(bc.rag_chunks_used), 0) as avg_chunks,
+                   SUM(CASE WHEN bc.rag_chunks_used > 0 THEN 1 ELSE 0 END) as with_rag,
+                   COUNT(*) as total
+            FROM bot_consultations bc WHERE 1=1 {date_filter}
+        """).fetchone()
+        rag_coverage = round((rag_usage["with_rag"] / rag_usage["total"] * 100)
+                             if rag_usage["total"] > 0 else 0, 1)
+
+        # Free vs paid query split
+        free_queries = conn.execute(f"""
+            SELECT COUNT(*) as cnt FROM bot_consultations bc
+            WHERE bc.is_free_tier = 1 {date_filter}
+        """).fetchone()["cnt"]
+        paid_queries = total_queries - free_queries
+
+        clinical = {
+            "specialty_distribution": specialty_dist,
+            "deepening_count": deepening_count,
+            "deepening_rate": deepening_rate,
+            "avg_rag_chunks": round(rag_usage["avg_chunks"], 1),
+            "rag_coverage": rag_coverage,
+            "free_queries": free_queries,
+            "paid_queries": paid_queries,
+        }
+
+        # ── Feedback / Decision Support ──
+        feedback_by_day = [dict(r) for r in conn.execute(f"""
+            SELECT date(bc.created_at) as day,
+                   SUM(CASE WHEN bc.user_feedback IN ('Mejoró mi manera de ver las cosas', 'Reforzó mi plan') THEN 1 ELSE 0 END) as positive,
+                   SUM(CASE WHEN bc.user_feedback = 'Información incompleta' THEN 1 ELSE 0 END) as neutral,
+                   SUM(CASE WHEN bc.user_feedback IN ('Información incorrecta', 'No me sirvió (otra razón)') THEN 1 ELSE 0 END) as negative
+            FROM bot_consultations bc
+            WHERE bc.user_feedback IS NOT NULL {date_filter}
+            GROUP BY day ORDER BY day
+        """).fetchall()]
+
+        feedback_response_rate = round(
+            (feedback_total / total_queries * 100) if total_queries > 0 else 0, 1
+        )
+
+        # Deepening trend per day
+        deepening_per_day = [dict(r) for r in conn.execute(f"""
+            SELECT date(bc.created_at) as day, COUNT(*) as count
+            FROM bot_consultations bc
+            WHERE bc.is_deepening = 1 {date_filter}
+            GROUP BY day ORDER BY day
+        """).fetchall()]
+
+        feedback = {
+            "distribution": feedback_dist,
+            "total": feedback_total,
+            "score": feedback_score,
+            "response_rate": feedback_response_rate,
+            "by_day": feedback_by_day,
+            "deepening_per_day": deepening_per_day,
+        }
+
+        # ── API Costs (estimated) ──
+        _COST_PER_1K = {
+            # (input_per_1k, output_per_1k) in USD
+            "claude-sonnet-4-20250514": (0.003, 0.015),
+            "claude-opus-4-6": (0.015, 0.075),
+            "openai/gpt-oss-120b": (0.0, 0.0),  # Groq free tier
+        }
+
+        cost_by_model = conn.execute(f"""
+            SELECT bc.llm_model,
+                   SUM(bc.tokens_input) as total_in,
+                   SUM(bc.tokens_output) as total_out,
+                   COUNT(*) as queries
+            FROM bot_consultations bc
+            WHERE bc.llm_model != '' {date_filter}
+            GROUP BY bc.llm_model ORDER BY total_out DESC
+        """).fetchall()
+
+        api_costs = []
+        total_cost = 0.0
+        for row in cost_by_model:
+            model = row["llm_model"]
+            rates = _COST_PER_1K.get(model, (0.003, 0.015))  # default Sonnet rates
+            cost_in = (row["total_in"] / 1000) * rates[0]
+            cost_out = (row["total_out"] / 1000) * rates[1]
+            cost = round(cost_in + cost_out, 4)
+            total_cost += cost
+            api_costs.append({
+                "model": model,
+                "tokens_input": row["total_in"],
+                "tokens_output": row["total_out"],
+                "queries": row["queries"],
+                "cost_usd": cost,
+            })
+
+        cost_per_day = [dict(r) for r in conn.execute(f"""
+            SELECT date(bc.created_at) as day,
+                   bc.llm_model as model,
+                   SUM(bc.tokens_input) as tokens_in,
+                   SUM(bc.tokens_output) as tokens_out
+            FROM bot_consultations bc
+            WHERE bc.llm_model != '' {date_filter}
+            GROUP BY day, bc.llm_model ORDER BY day
+        """).fetchall()]
+
+        # Compute daily costs
+        daily_costs = {}
+        for row in cost_per_day:
+            day = row["day"]
+            rates = _COST_PER_1K.get(row["model"], (0.003, 0.015))
+            cost = (row["tokens_in"] / 1000) * rates[0] + (row["tokens_out"] / 1000) * rates[1]
+            daily_costs[day] = round(daily_costs.get(day, 0) + cost, 4)
+        cost_trend = [{"day": d, "cost": c} for d, c in sorted(daily_costs.items())]
+
+        total_tokens = sum(r["tokens_input"] + r["tokens_output"] for r in cost_by_model)
+        avg_cost_per_query = round(total_cost / total_queries, 4) if total_queries > 0 else 0
+
+        api_usage = {
+            "by_model": api_costs,
+            "total_cost_usd": round(total_cost, 2),
+            "avg_cost_per_query": avg_cost_per_query,
+            "total_tokens": total_tokens,
+            "cost_trend": cost_trend,
+        }
+
+        # ── Diagnosis-Deepening Correlation ──
+        # Which specialties/queries get deepened most
+        deepen_by_specialty = [dict(r) for r in conn.execute(f"""
+            SELECT bc.specialty,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN bc.is_deepening = 1 THEN 1 ELSE 0 END) as deepened
+            FROM bot_consultations bc WHERE 1=1 {date_filter}
+            GROUP BY bc.specialty ORDER BY total DESC
+        """).fetchall()]
+        for row in deepen_by_specialty:
+            row["deepening_rate"] = round(
+                (row["deepened"] / row["total"] * 100) if row["total"] > 0 else 0, 1
+            )
+
+        # Top queries that were deepened (query text snippets)
+        top_deepened = [dict(r) for r in conn.execute(f"""
+            SELECT bc.query_text, COUNT(*) as times_deepened
+            FROM bot_consultations bc
+            WHERE bc.is_deepening = 1 AND bc.query_text != '' {date_filter}
+            GROUP BY bc.query_text ORDER BY times_deepened DESC LIMIT 10
+        """).fetchall()]
+        # Truncate query text for display
+        for row in top_deepened:
+            if len(row["query_text"]) > 80:
+                row["query_text"] = row["query_text"][:80] + "..."
+
+        clinical["deepen_by_specialty"] = deepen_by_specialty
+        clinical["top_deepened_queries"] = top_deepened
+
+        return {
+            "kpis": kpis,
+            "time_series": time_series,
+            "distributions": distributions,
+            "clinical": clinical,
+            "feedback": feedback,
+            "api_usage": api_usage,
         }
     finally:
         conn.close()
