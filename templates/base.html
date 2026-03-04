@@ -187,7 +187,12 @@
         </nav>
 
         <div class="sidebar-footer">
-            MedExpert Admin v2.0
+            {% if user %}
+                {{ user.display_name or user.username }} ({{ user.role }})
+                <br><a href="/logout" style="color: #f59e0b; text-decoration: none; font-size: 0.95em;">Cerrar sesion</a>
+            {% else %}
+                MedExpert Admin v2.0
+            {% endif %}
         </div>
     </aside>
 
@@ -212,6 +217,8 @@
             const opts = { method, headers: { 'Content-Type': 'application/json' } };
             if (body) opts.body = JSON.stringify(body);
             const res = await fetch(url, opts);
+            if (res.status === 401) { window.location.href = '/login'; return; }
+            if (res.status === 403) { showToast('Sin permisos para esta accion', 'error'); return; }
             return res.json();
         }
     </script>

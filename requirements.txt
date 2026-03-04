@@ -33,6 +33,10 @@ stripe==11.4.1
 mercadopago==2.3.0
 paypal-server-sdk==2.2.0
 
+# Auth
+bcrypt>=4.0.0
+itsdangerous>=2.0
+
 # Utilities
 python-dotenv==1.0.1
 rich==13.9.4

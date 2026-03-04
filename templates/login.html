@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedExpert Admin - Login</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <meta name="theme-color" content="#0a0e1a">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0a0e1a;
+            color: #e0e6ed;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container { width: 100%; max-width: 360px; padding: 20px; }
+        .login-logo { text-align: center; margin-bottom: 32px; }
+        .login-logo img { height: 48px; }
+        .login-card {
+            background: #151b30;
+            border: 1px solid #2a3050;
+            border-radius: 12px;
+            padding: 32px 28px;
+        }
+        .login-card h2 {
+            color: #f59e0b;
+            font-size: 1.1em;
+            margin-bottom: 24px;
+            text-align: center;
+        }
+        .form-group { margin-bottom: 16px; }
+        .form-group label {
+            display: block;
+            font-size: 0.78em;
+            color: #64748b;
+            margin-bottom: 6px;
+        }
+        .form-group input {
+            width: 100%;
+            background: #1a2040;
+            border: 1px solid #2a3050;
+            border-radius: 6px;
+            color: #e0e6ed;
+            padding: 10px 14px;
+            font-size: 0.9em;
+            font-family: inherit;
+        }
+        .form-group input:focus { outline: none; border-color: #f59e0b; }
+        .login-btn {
+            width: 100%;
+            padding: 10px;
+            background: #92400e;
+            color: #f59e0b;
+            border: 1px solid #b45309;
+            border-radius: 6px;
+            font-size: 0.9em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 8px;
+        }
+        .login-btn:hover { background: #b45309; color: #fbbf24; }
+        .error-msg {
+            background: #3f1219;
+            color: #f87171;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 0.82em;
+            margin-bottom: 16px;
+            border: 1px solid #7f1d1d;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-logo">
+            <img src="/static/logo.jpg" alt="MedExpert">
+        </div>
+        <div class="login-card">
+            <h2>Iniciar sesion</h2>
+            {% if error %}
+                <div class="error-msg">{{ error }}</div>
+            {% endif %}
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label>Usuario</label>
+                    <input type="text" name="username" autocomplete="username" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label>Contrasena</label>
+                    <input type="password" name="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="login-btn">Entrar</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

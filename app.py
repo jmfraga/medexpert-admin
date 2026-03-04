@@ -10,6 +10,7 @@ Usage:
 import os
 import sys
 import json
+import secrets
 import asyncio
 import argparse
 import logging
@@ -27,10 +28,12 @@ from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
 import database as db
 from rag_engine import get_rag_for_expert
 from utils import generate_slug
+from auth import init_auth_db, authenticate_user, update_last_login, AuthMiddleware
 
 console = Console()
 load_dotenv(override=True)
@@ -44,6 +47,64 @@ PORT = int(os.getenv("ADMIN_PORT", 8080))
 app = FastAPI(title="MedExpert Admin", version="2.0.0")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+# ─────────────────────────────────────────────
+# Auth middleware (order: SessionMiddleware outer, AuthMiddleware inner)
+# ─────────────────────────────────────────────
+
+session_secret = os.getenv("SESSION_SECRET_KEY")
+if not session_secret:
+    session_secret = secrets.token_hex(32)
+    logger.warning("SESSION_SECRET_KEY not set — using random key (sessions won't persist across restarts)")
+
+app.add_middleware(AuthMiddleware)
+app.add_middleware(SessionMiddleware, secret_key=session_secret)
+
+# Auto-inject user into all template responses (zero changes to existing routes)
+_orig_template_response = templates.TemplateResponse
+
+def _template_response_with_user(name, context, **kwargs):
+    request = context.get("request")
+    if request and "user" not in context:
+        context["user"] = request.scope.get("user")
+    return _orig_template_response(name, context, **kwargs)
+
+templates.TemplateResponse = _template_response_with_user
+
+
+# ─────────────────────────────────────────────
+# Login / Logout
+# ─────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    if request.session.get("user_id"):
+        return RedirectResponse("/", status_code=302)
+    return templates.TemplateResponse("login.html", {"request": request})
+
+
+@app.post("/login")
+async def login_post(request: Request):
+    form = await request.form()
+    username = form.get("username", "").strip()
+    password = form.get("password", "")
+
+    user = authenticate_user(username, password)
+    if not user:
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "error": "Usuario o contrasena incorrectos",
+        })
+
+    request.session["user_id"] = user["id"]
+    update_last_login(user["id"])
+    return RedirectResponse("/", status_code=302)
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=302)
 
 
 # ─────────────────────────────────────────────
@@ -1560,6 +1621,7 @@ if __name__ == "__main__":
         PORT = args.port
 
     db.init_db()
+    init_auth_db()
 
     # Ensure expert directories
     for expert in db.get_all_experts():
