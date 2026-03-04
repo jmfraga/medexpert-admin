@@ -29,6 +29,7 @@ Part of the [MedExpert](https://github.com/jmfraga/MedExpert) ecosystem:
   - KB versioning with SHA256 manifests, keeps latest 3 versions
 - **LLM configuration** — Set default provider and model for client licenses
 - **Dashboard** — Overview of experts, clients, guidelines, and distribution status
+- **Analytics dashboard** — Chart.js visualizations for query patterns, guideline usage, API costs, clinical stats, and decision-support feedback analysis (`/analytics`)
 
 ## LLM Architecture
 
@@ -36,11 +37,12 @@ Tiered model strategy optimized for cost and quality:
 
 | Tier | Model | Provider | Use |
 |---|---|---|---|
-| Base | GPT-OSS 20B | Groq (→ local Ollama) | All initial responses (~2s) |
-| Deepen (free/basic) | GPT-OSS 120B | Groq | "Profundizar" button |
-| Deepen (premium) | Claude Opus 4.6 | Anthropic | Premium deepening (1/day) |
+| Base (all plans) | GPT-OSS 120B | Groq | All initial responses (~2s, free) |
+| Deepen (free) | GPT-OSS 120B | Groq | "Profundizar" button (within 5 free queries) |
+| Deepen (basic) | Claude Sonnet | Anthropic | "Profundizar" button (5/day) |
+| Deepen (premium) | Claude Opus 4.6 | Anthropic | Premium deepening (3/day) |
 
-**Plans:** 5 free queries → Plan Básico $299 MXN/mes → Plan Premium $499 MXN/mes
+**Plans:** 5 free queries → Plan Básico $14.99 USD/mes → Plan Premium $24.99 USD/mes
 
 Additional models available for admin/client configuration:
 
@@ -85,6 +87,7 @@ medexpert-admin/
 │   ├── guidelines.html    # Per-expert guidelines + web sources
 │   ├── glossary.html      # Per-expert medical glossary management
 │   ├── clients.html       # Client management + per-client config + distribution
+│   ├── analytics.html     # Analytics dashboard (Chart.js, KPIs, API costs)
 │   ├── tickets.html       # Ticket management (corrections, bugs, features)
 │   └── config.html        # API keys, LLM model config, system info
 └── data/
@@ -114,11 +117,12 @@ python bot.py --specialty cardio     # Other specialty
 - Voice and text clinical consultations
 - Bilingual RAG search (Spanish queries + English clinical translation for NCCN/ESMO)
 - Source diversification: NCCN/ESMO prioritized over IMSS
-- "Profundizar" button for deeper analysis (tiered by plan)
+- "Profundizar" button for deeper analysis (tiered: GPT-OSS free, Sonnet basic, Opus premium)
 - Whisper transcription for voice messages (local, private)
 - PDF export with full citations per consultation
-- 5 free queries, Plan Básico $299/mes, Plan Premium $499/mes
+- 5 free queries, Plan Básico $14.99 USD/mes, Plan Premium $24.99 USD/mes
 - User tracking, referral codes, usage analytics
+- Feedback system ("¿Te sirvió?") with decision-support tracking
 
 **Architecture:** Bot and Admin run on the same server, sharing ChromaDB. Admin indexes guidelines, bot queries them read-only. Planned deployment: Mac Mini M1 (24/7) with API-only, then Mac Mini M4 Pro with local Ollama.
 
