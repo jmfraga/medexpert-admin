@@ -1550,7 +1550,7 @@ def get_analytics_data(days: int | None = 30) -> dict:
             daily_costs[day] = round(daily_costs.get(day, 0) + cost, 4)
         cost_trend = [{"day": d, "cost": c} for d, c in sorted(daily_costs.items())]
 
-        total_tokens = sum(r["tokens_input"] + r["tokens_output"] for r in cost_by_model)
+        total_tokens = sum(r["tokens_input"] + r["tokens_output"] for r in api_costs)
         avg_cost_per_query = round(total_cost / total_queries, 4) if total_queries > 0 else 0
 
         api_usage = {
