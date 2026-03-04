@@ -720,6 +720,9 @@ async def bot_dashboard(request: Request):
     consultations = db.get_bot_recent_consultations(limit=50)
     pending_verifications = db.get_pending_verifications()
     referral_stats = db.get_referral_stats()
+    broadcasts = db.get_all_broadcasts(limit=20)
+    congresses = db.get_all_congress_events()
+    upcoming_congresses = db.get_upcoming_congresses(days_ahead=180)
     return templates.TemplateResponse("bot.html", {
         "request": request,
         "active_page": "bot",
@@ -728,6 +731,9 @@ async def bot_dashboard(request: Request):
         "consultations": consultations,
         "pending_verifications": pending_verifications,
         "referral_stats": referral_stats,
+        "broadcasts": broadcasts,
+        "congresses": congresses,
+        "upcoming_congresses": upcoming_congresses,
     })
 
 
@@ -1330,6 +1336,195 @@ async def clip_webhook(request: Request):
             logger.error(f"Failed to notify user {telegram_id} about Clip payment: {e}")
 
     return JSONResponse({"received": True})
+
+
+# ─────────────────────────────────────────────
+# Broadcast System
+# ─────────────────────────────────────────────
+
+@app.get("/api/broadcasts")
+async def list_broadcasts():
+    broadcasts = db.get_all_broadcasts(limit=50)
+    return JSONResponse({"ok": True, "broadcasts": broadcasts})
+
+
+@app.post("/api/broadcasts")
+async def create_broadcast(request: Request):
+    data = await request.json()
+    title = data.get("title", "").strip()
+    message = data.get("message", "").strip()
+    target = data.get("target", "all")
+    if not message:
+        return JSONResponse({"ok": False, "error": "Mensaje requerido"}, status_code=400)
+    if target not in ("all", "subscribers", "premium", "verified"):
+        return JSONResponse({"ok": False, "error": "Target invalido"}, status_code=400)
+    broadcast_id = db.create_broadcast(title=title or "Sin titulo", message=message, target=target)
+    return JSONResponse({"ok": True, "id": broadcast_id})
+
+
+@app.post("/api/broadcasts/{broadcast_id}/send")
+async def send_broadcast(broadcast_id: int):
+    """Send a broadcast message to target users via Telegram."""
+    import httpx
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        return JSONResponse({"ok": False, "error": "Bot token not configured"}, status_code=500)
+
+    # Get broadcast details
+    broadcasts = db.get_all_broadcasts(limit=100)
+    broadcast = next((b for b in broadcasts if b["id"] == broadcast_id), None)
+    if not broadcast:
+        return JSONResponse({"ok": False, "error": "Broadcast no encontrado"}, status_code=404)
+    if broadcast["status"] == "sent":
+        return JSONResponse({"ok": False, "error": "Ya fue enviado"})
+
+    db.update_broadcast_status(broadcast_id, "sending")
+
+    # Get target user IDs
+    targets = db.get_broadcast_targets(broadcast["target"])
+    if not targets:
+        db.update_broadcast_status(broadcast_id, "sent", sent_count=0)
+        return JSONResponse({"ok": True, "sent": 0, "failed": 0})
+
+    sent = 0
+    failed = 0
+    msg_text = f"<b>{broadcast['title']}</b>\n\n{broadcast['message']}\n\n<i>— Equipo MedExpert</i>"
+
+    async with httpx.AsyncClient() as client:
+        for tid in targets:
+            try:
+                resp = await client.post(
+                    f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                    json={"chat_id": tid, "text": msg_text, "parse_mode": "HTML"},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    sent += 1
+                else:
+                    failed += 1
+                    logger.warning(f"Broadcast to {tid}: HTTP {resp.status_code}")
+            except Exception as e:
+                failed += 1
+                logger.error(f"Broadcast to {tid} failed: {e}")
+
+    db.update_broadcast_status(broadcast_id, "sent", sent_count=sent, failed_count=failed)
+    return JSONResponse({"ok": True, "sent": sent, "failed": failed})
+
+
+@app.delete("/api/broadcasts/{broadcast_id}")
+async def delete_broadcast(broadcast_id: int):
+    conn = db.get_connection()
+    try:
+        cursor = conn.execute("DELETE FROM broadcast_messages WHERE id = ?", (broadcast_id,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+    finally:
+        conn.close()
+    return JSONResponse({"ok": True})
+
+
+# ─────────────────────────────────────────────
+# Congress Calendar
+# ─────────────────────────────────────────────
+
+@app.get("/api/congresses")
+async def list_congresses():
+    events = db.get_all_congress_events()
+    return JSONResponse({"ok": True, "events": events})
+
+
+@app.post("/api/congresses")
+async def create_congress(request: Request):
+    data = await request.json()
+    name = data.get("name", "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "Nombre requerido"}, status_code=400)
+    event_id = db.create_congress_event(
+        name=name,
+        short_name=data.get("short_name", ""),
+        society=data.get("society", ""),
+        location=data.get("location", ""),
+        start_date=data.get("start_date", ""),
+        end_date=data.get("end_date", ""),
+        description=data.get("description", ""),
+        url=data.get("url", ""),
+        alert_days_before=int(data.get("alert_days_before", 7)),
+    )
+    return JSONResponse({"ok": True, "id": event_id})
+
+
+@app.put("/api/congresses/{event_id}")
+async def update_congress(event_id: int, request: Request):
+    data = await request.json()
+    updated = db.update_congress_event(event_id, **{
+        k: v for k, v in data.items()
+        if k in ("name", "short_name", "society", "location", "start_date", "end_date",
+                 "description", "url", "alert_days_before", "is_active", "alert_sent")
+    })
+    return JSONResponse({"ok": updated})
+
+
+@app.delete("/api/congresses/{event_id}")
+async def delete_congress(event_id: int):
+    deleted = db.delete_congress_event(event_id)
+    if not deleted:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/congresses/send-alerts")
+async def send_congress_alerts():
+    """Check for congresses needing alert and send notifications."""
+    import httpx
+
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        return JSONResponse({"ok": False, "error": "Bot token not configured"}, status_code=500)
+
+    events = db.get_congresses_needing_alert()
+    if not events:
+        return JSONResponse({"ok": True, "sent": 0, "message": "No hay alertas pendientes"})
+
+    targets = db.get_broadcast_targets("subscribers")
+    sent_total = 0
+
+    async with httpx.AsyncClient() as client:
+        for event in events:
+            msg = (
+                f"<b>Congreso proximo: {event['short_name'] or event['name']}</b>\n\n"
+                f"{event['name']}\n"
+                f"Fecha: {event['start_date']}"
+            )
+            if event.get("end_date"):
+                msg += f" - {event['end_date']}"
+            msg += "\n"
+            if event.get("location"):
+                msg += f"Lugar: {event['location']}\n"
+            if event.get("description"):
+                msg += f"\n{event['description']}\n"
+            if event.get("url"):
+                msg += f"\n{event['url']}"
+            msg += "\n\n<i>— MedExpert Congresos</i>"
+
+            sent = 0
+            for tid in targets:
+                try:
+                    resp = await client.post(
+                        f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                        json={"chat_id": tid, "text": msg, "parse_mode": "HTML"},
+                        timeout=10.0,
+                    )
+                    if resp.status_code == 200:
+                        sent += 1
+                except Exception:
+                    pass
+
+            db.update_congress_event(event["id"], alert_sent=1)
+            sent_total += sent
+
+    return JSONResponse({"ok": True, "sent": sent_total, "events": len(events)})
 
 
 # ─────────────────────────────────────────────

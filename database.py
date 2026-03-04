@@ -214,6 +214,36 @@ def init_db():
             FOREIGN KEY (referred_id) REFERENCES bot_users(telegram_id)
         );
 
+        -- Broadcast Messages
+        CREATE TABLE IF NOT EXISTS broadcast_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            target TEXT DEFAULT 'all' CHECK(target IN ('all', 'subscribers', 'premium', 'verified')),
+            sent_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'draft' CHECK(status IN ('draft', 'sending', 'sent', 'failed')),
+            created_at TEXT DEFAULT (datetime('now')),
+            sent_at TEXT
+        );
+
+        -- Congress Events Calendar
+        CREATE TABLE IF NOT EXISTS congress_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            short_name TEXT NOT NULL,
+            society TEXT DEFAULT '',
+            location TEXT DEFAULT '',
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            url TEXT DEFAULT '',
+            alert_days_before INTEGER DEFAULT 7,
+            alert_sent INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
         -- Telegram Bot Users
         CREATE TABLE IF NOT EXISTS bot_users (
             telegram_id INTEGER PRIMARY KEY,
@@ -378,6 +408,29 @@ def init_db():
             ])
             conn.commit()
             console.print("[green]Default pricing plans seeded[/green]")
+    except Exception:
+        pass
+    # Seed congress events if empty
+    try:
+        count = conn.execute("SELECT COUNT(*) as cnt FROM congress_events").fetchone()["cnt"]
+        if count == 0:
+            conn.executemany("""
+                INSERT INTO congress_events (name, short_name, society, location, start_date, end_date, description, url, alert_days_before)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                ("ASCO Annual Meeting 2026", "ASCO 2026", "ASCO", "Chicago, IL, USA", "2026-05-29", "2026-06-02",
+                 "Congreso anual de la American Society of Clinical Oncology", "https://meetings.asco.org/am", 14),
+                ("ESMO Congress 2026", "ESMO 2026", "ESMO", "Roma, Italia", "2026-09-18", "2026-09-22",
+                 "Congreso anual de la European Society for Medical Oncology", "https://www.esmo.org/meeting-calendar", 14),
+                ("SMEO Congreso Nacional 2026", "SMEO 2026", "SMEO", "Ciudad de Mexico", "2026-10-14", "2026-10-17",
+                 "Congreso nacional de la Sociedad Mexicana de Oncologia", "https://smeo.org.mx", 14),
+                ("San Antonio Breast Cancer Symposium 2026", "SABCS 2026", "SABCS", "San Antonio, TX, USA", "2026-12-08", "2026-12-12",
+                 "Simposio de cancer de mama", "https://www.sabcs.org", 10),
+                ("ASCO GI 2027", "ASCO GI 2027", "ASCO", "San Francisco, CA, USA", "2027-01-22", "2027-01-24",
+                 "ASCO Gastrointestinal Cancers Symposium", "https://meetings.asco.org/gi", 10),
+            ])
+            conn.commit()
+            console.print("[green]Congress events seeded (5 events)[/green]")
     except Exception:
         pass
     conn.close()
@@ -1519,5 +1572,153 @@ def get_user_referrals(telegram_id: int) -> list[dict]:
         WHERE rr.referrer_id = ?
         ORDER BY rr.created_at DESC
     """, (telegram_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────
+# Broadcast Messages
+# ─────────────────────────────────────────────
+
+def create_broadcast(title: str, message: str, target: str = "all") -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            INSERT INTO broadcast_messages (title, message, target)
+            VALUES (?, ?, ?)
+        """, (title, message, target))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_all_broadcasts(limit: int = 20) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM broadcast_messages ORDER BY created_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_broadcast_status(broadcast_id: int, status: str, sent_count: int = 0,
+                             failed_count: int = 0):
+    conn = get_connection()
+    updates = ["status = ?"]
+    params = [status]
+    if sent_count:
+        updates.append("sent_count = ?"); params.append(sent_count)
+    if failed_count:
+        updates.append("failed_count = ?"); params.append(failed_count)
+    if status == "sent":
+        updates.append("sent_at = datetime('now')")
+    params.append(broadcast_id)
+    conn.execute(f"UPDATE broadcast_messages SET {', '.join(updates)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def get_broadcast_targets(target: str = "all") -> list[int]:
+    """Get list of telegram_ids for a broadcast target group."""
+    conn = get_connection()
+    if target == "subscribers":
+        rows = conn.execute(
+            "SELECT telegram_id FROM bot_users WHERE subscription_status = 'active'"
+        ).fetchall()
+    elif target == "premium":
+        rows = conn.execute(
+            "SELECT telegram_id FROM bot_users WHERE subscription_plan = 'premium' AND subscription_status = 'active'"
+        ).fetchall()
+    elif target == "verified":
+        rows = conn.execute(
+            "SELECT telegram_id FROM bot_users WHERE is_verified = 1"
+        ).fetchall()
+    else:  # "all"
+        rows = conn.execute("SELECT telegram_id FROM bot_users").fetchall()
+    conn.close()
+    return [r["telegram_id"] for r in rows]
+
+
+# ─────────────────────────────────────────────
+# Congress Events
+# ─────────────────────────────────────────────
+
+def get_all_congress_events(active_only: bool = False) -> list[dict]:
+    conn = get_connection()
+    q = "SELECT * FROM congress_events"
+    if active_only:
+        q += " WHERE is_active = 1"
+    q += " ORDER BY start_date"
+    rows = conn.execute(q).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_upcoming_congresses(days_ahead: int = 90) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT * FROM congress_events
+        WHERE is_active = 1 AND start_date >= date('now')
+        AND start_date <= date('now', '+' || ? || ' days')
+        ORDER BY start_date
+    """, (days_ahead,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_congress_event(name: str, short_name: str, society: str = "",
+                           location: str = "", start_date: str = "", end_date: str = "",
+                           description: str = "", url: str = "",
+                           alert_days_before: int = 7) -> int:
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            INSERT INTO congress_events (name, short_name, society, location,
+                start_date, end_date, description, url, alert_days_before)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, short_name, society, location, start_date, end_date,
+              description, url, alert_days_before))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_congress_event(event_id: int, **kwargs) -> bool:
+    conn = get_connection()
+    allowed = {"name", "short_name", "society", "location", "start_date", "end_date",
+               "description", "url", "alert_days_before", "is_active", "alert_sent"}
+    updates, params = [], []
+    for key, val in kwargs.items():
+        if key in allowed and val is not None:
+            updates.append(f"{key} = ?"); params.append(val)
+    if updates:
+        params.append(event_id)
+        conn.execute(f"UPDATE congress_events SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+    conn.close()
+    return bool(updates)
+
+
+def delete_congress_event(event_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.execute("DELETE FROM congress_events WHERE id = ?", (event_id,))
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+
+def get_congresses_needing_alert() -> list[dict]:
+    """Get congresses that need alert (within alert_days_before and not yet sent)."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT * FROM congress_events
+        WHERE is_active = 1 AND alert_sent = 0
+        AND date(start_date, '-' || alert_days_before || ' days') <= date('now')
+        AND start_date >= date('now')
+        ORDER BY start_date
+    """).fetchall()
     conn.close()
     return [dict(r) for r in rows]

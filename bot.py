@@ -23,6 +23,7 @@ load_dotenv(override=True)
 
 import database as db
 from bot_brain import BotBrain, transcribe_audio, format_response_for_telegram, generate_consultation_pdf
+from anonymizer import anonymize_text
 
 # Logging
 logging.basicConfig(
@@ -134,6 +135,7 @@ async def cmd_start(update, context):
         f"  /ayuda — Guía completa y tips\n"
         f"  /estado — Tu cuenta y consultas restantes\n"
         f"  /suscribir — Planes y precios\n"
+        f"  /congresos — Proximos congresos medicos\n"
         f"  /soporte — Reportar problemas o sugerencias\n"
         f"  /terminos — Aviso legal\n"
         f"  /cancelar — Cancelar acción en curso\n\n"
@@ -168,6 +170,7 @@ async def cmd_ayuda(update, context):
         "  /ayuda - Esta ayuda\n"
         "  /estado - Estado de cuenta y consultas\n"
         "  /suscribir - Planes y suscripciones\n"
+        "  /congresos - Proximos congresos medicos\n"
         "  /terminos - Terminos del servicio\n"
         "  /soporte - Contactar soporte\n\n"
         "<b>AVISO:</b> Herramienta de apoyo clinico.\n"
@@ -343,6 +346,32 @@ async def handle_verification_photo(update, context):
         )
         logger.info(f"Verification docs submitted by {user.id}")
     return True
+
+
+async def cmd_congresos(update, context):
+    """Handle /congresos command — show upcoming medical congresses."""
+    events = db.get_upcoming_congresses(days_ahead=180)
+    if not events:
+        await update.message.reply_text(
+            "No hay congresos programados en los proximos meses.\n"
+            "Te notificaremos cuando se agreguen nuevos eventos."
+        )
+        return
+
+    lines = ["<b>Congresos proximos</b>\n"]
+    for e in events:
+        lines.append(f"<b>{e['short_name'] or e['name']}</b>")
+        lines.append(f"  {e['start_date']}")
+        if e.get("end_date"):
+            lines[-1] += f" - {e['end_date']}"
+        if e.get("location"):
+            lines.append(f"  {e['location']}")
+        if e.get("url"):
+            lines.append(f"  {e['url']}")
+        lines.append("")
+
+    lines.append("<i>Suscribete para recibir alertas y resumenes post-congreso.</i>")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 async def cmd_suscribir(update, context):
@@ -925,7 +954,7 @@ async def handle_voice(update, context):
             telegram_id=user.id,
             specialty=specialty,
             query_type="voice",
-            query_text=transcript,
+            query_text=anonymize_text(transcript),
             response_text=result.get("response", ""),
             response_time_seconds=result.get("processing_time", 0),
             llm_provider=result.get("provider", ""),
@@ -1059,7 +1088,7 @@ async def handle_text(update, context):
             telegram_id=user.id,
             specialty=specialty,
             query_type="text",
-            query_text=text,
+            query_text=anonymize_text(text),
             response_text=result.get("response", ""),
             response_time_seconds=result.get("processing_time", 0),
             llm_provider=result.get("provider", ""),
@@ -1485,6 +1514,7 @@ def main():
     app.add_handler(CommandHandler("cancelar", cmd_cancelar))
     app.add_handler(CommandHandler("suscribir", cmd_suscribir))
     app.add_handler(CommandHandler("verificar", cmd_verificar))
+    app.add_handler(CommandHandler("congresos", cmd_congresos))
 
     # Photo/document handler for verification flow
     async def handle_photo_or_doc(update, context):
@@ -1525,6 +1555,7 @@ def main():
             BotCommand("estado", "Ver tu plan y consultas"),
             BotCommand("suscribir", "Ver planes de suscripcion"),
             BotCommand("verificar", "Verificar cedula profesional"),
+            BotCommand("congresos", "Proximos congresos medicos"),
             BotCommand("soporte", "Contactar soporte"),
             BotCommand("terminos", "Terminos y condiciones"),
             BotCommand("cancelar", "Cancelar accion en curso"),

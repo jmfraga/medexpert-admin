@@ -219,6 +219,18 @@
             max-height: 70vh;
             border-radius: 8px;
         }
+
+        .config-input {
+            background: #1a2040;
+            color: #e0e6ed;
+            border: 1px solid #2a3050;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.85em;
+            font-family: inherit;
+        }
+        .config-input:focus { outline: none; border-color: #f59e0b; }
+        .config-input::placeholder { color: #475569; }
 {% endblock %}
 
 {% block content %}
@@ -264,6 +276,8 @@
         <div class="tabs">
             <div class="tab active" onclick="switchTab('users')">Usuarios ({{ users|length }})</div>
             <div class="tab" onclick="switchTab('consultations')">Consultas recientes</div>
+            <div class="tab" onclick="switchTab('broadcasts')">Broadcasts</div>
+            <div class="tab" onclick="switchTab('congresses')">Congresos</div>
             <div class="tab" onclick="switchTab('verifications')">Verificaciones {% if pending_verifications %}({{ pending_verifications|length }}){% endif %}</div>
             <div class="tab" onclick="switchTab('referrals')">Referidos</div>
         </div>
@@ -392,6 +406,186 @@
                 </tbody>
             </table>
         </div>
+        <div id="tab-broadcasts" class="tab-content">
+            <h3 class="section-title">Enviar broadcast</h3>
+            <div style="background:#111827; border:1px solid #1e2640; border-radius:10px; padding:16px; margin-bottom:20px;">
+                <div style="display:flex; gap:12px; margin-bottom:12px;">
+                    <div style="flex:1;">
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Titulo</label>
+                        <input class="config-input" id="broadcastTitle" placeholder="Nuevas guias disponibles" style="width:100%; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Destinatarios</label>
+                        <select id="broadcastTarget" style="background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:6px 10px; font-size:0.85em;">
+                            <option value="all">Todos</option>
+                            <option value="subscribers">Suscriptores</option>
+                            <option value="premium">Premium</option>
+                            <option value="verified">Verificados</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Mensaje</label>
+                    <textarea id="broadcastMessage" rows="4" placeholder="Escribe el mensaje que se enviara a los usuarios..."
+                        style="width:100%; box-sizing:border-box; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:8px 10px; font-size:0.85em; font-family:inherit; resize:vertical;"></textarea>
+                </div>
+                <button class="btn primary" onclick="createAndSendBroadcast()">Crear y enviar</button>
+                <button class="btn" onclick="createBroadcastDraft()">Guardar borrador</button>
+            </div>
+
+            <h3 class="section-title">Historial de broadcasts</h3>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Titulo</th>
+                        <th>Target</th>
+                        <th>Estado</th>
+                        <th>Enviados</th>
+                        <th>Fecha</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for b in broadcasts %}
+                    <tr id="broadcast-row-{{ b.id }}">
+                        <td>{{ b.id }}</td>
+                        <td style="color:#e0e6ed; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ b.title }}</td>
+                        <td>
+                            {% if b.target == 'all' %}<span class="badge blue">Todos</span>
+                            {% elif b.target == 'subscribers' %}<span class="badge green">Suscriptores</span>
+                            {% elif b.target == 'premium' %}<span class="badge purple">Premium</span>
+                            {% elif b.target == 'verified' %}<span class="badge amber">Verificados</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if b.status == 'sent' %}<span class="badge green">Enviado</span>
+                            {% elif b.status == 'sending' %}<span class="badge amber">Enviando</span>
+                            {% else %}<span class="badge blue">Borrador</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ b.sent_count }}/{{ b.sent_count + b.failed_count }}</td>
+                        <td style="white-space:nowrap;">{{ (b.sent_at or b.created_at)[:16] }}</td>
+                        <td>
+                            {% if b.status == 'draft' %}
+                            <button class="btn primary" onclick="sendBroadcast({{ b.id }})" style="padding:3px 8px; font-size:0.78em;">Enviar</button>
+                            {% endif %}
+                            <button class="btn danger" onclick="deleteBroadcast({{ b.id }})" style="padding:3px 8px; font-size:0.78em;">X</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not broadcasts %}
+                    <tr>
+                        <td colspan="7" style="color:#475569; text-align:center; padding:20px;">
+                            No hay broadcasts
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <div id="tab-congresses" class="tab-content">
+            <h3 class="section-title">Calendario de congresos</h3>
+            <div style="background:#111827; border:1px solid #1e2640; border-radius:10px; padding:16px; margin-bottom:20px;">
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Nombre completo</label>
+                        <input class="config-input" id="congressName" placeholder="American Society of Clinical Oncology Annual Meeting 2026" style="width:100%; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Nombre corto</label>
+                        <input class="config-input" id="congressShortName" placeholder="ASCO 2026" style="width:100%; box-sizing:border-box;">
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:12px;">
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Sociedad</label>
+                        <input class="config-input" id="congressSociety" placeholder="ASCO" style="width:100%; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Lugar</label>
+                        <input class="config-input" id="congressLocation" placeholder="Chicago, IL, USA" style="width:100%; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">URL</label>
+                        <input class="config-input" id="congressUrl" placeholder="https://..." style="width:100%; box-sizing:border-box;">
+                    </div>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:12px;">
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Fecha inicio</label>
+                        <input class="config-input" type="date" id="congressStart" style="width:100%; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Fecha fin</label>
+                        <input class="config-input" type="date" id="congressEnd" style="width:100%; box-sizing:border-box;">
+                    </div>
+                    <div>
+                        <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Alerta (dias antes)</label>
+                        <input class="config-input" type="number" id="congressAlertDays" value="7" style="width:100%; box-sizing:border-box;">
+                    </div>
+                </div>
+                <div style="margin-bottom:12px;">
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:4px;">Descripcion</label>
+                    <textarea id="congressDesc" rows="2" placeholder="Descripcion breve..."
+                        style="width:100%; box-sizing:border-box; background:#1a2040; border:1px solid #2a3050; border-radius:6px; color:#e0e6ed; padding:8px 10px; font-size:0.85em; font-family:inherit; resize:vertical;"></textarea>
+                </div>
+                <button class="btn success" onclick="createCongress()">Agregar congreso</button>
+                <button class="btn primary" onclick="sendCongressAlerts()" style="margin-left:8px;">Enviar alertas pendientes</button>
+            </div>
+
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Congreso</th>
+                        <th>Sociedad</th>
+                        <th>Lugar</th>
+                        <th>Fechas</th>
+                        <th>Alerta</th>
+                        <th>Estado</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in congresses %}
+                    <tr id="congress-row-{{ c.id }}">
+                        <td>
+                            <span style="color:#e0e6ed; font-weight:500;">{{ c.short_name or c.name }}</span><br>
+                            <span style="font-size:0.78em; color:#475569;">{{ c.name }}</span>
+                        </td>
+                        <td>{{ c.society }}</td>
+                        <td style="font-size:0.85em;">{{ c.location }}</td>
+                        <td style="white-space:nowrap; font-size:0.85em;">
+                            {{ c.start_date }}{% if c.end_date %}<br>{{ c.end_date }}{% endif %}
+                        </td>
+                        <td>
+                            {% if c.alert_sent %}
+                                <span class="badge green">Enviada</span>
+                            {% else %}
+                                <span class="badge blue">{{ c.alert_days_before }}d antes</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if c.is_active %}<span class="badge green">Activo</span>
+                            {% else %}<span class="badge red">Inactivo</span>{% endif %}
+                        </td>
+                        <td>
+                            <button class="btn danger" onclick="deleteCongress({{ c.id }})" style="padding:3px 8px; font-size:0.78em;">X</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not congresses %}
+                    <tr>
+                        <td colspan="7" style="color:#475569; text-align:center; padding:20px;">
+                            No hay congresos registrados
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
         <div id="tab-verifications" class="tab-content">
             <h3 class="section-title">Verificaciones pendientes</h3>
             {% if pending_verifications %}
@@ -646,6 +840,117 @@
                 document.getElementById('notifyModal').classList.remove('show');
             } else {
                 showToast(res.error || 'Error enviando', 'error');
+            }
+        }
+
+        // ── Broadcasts ──
+        async function createBroadcastDraft() {
+            const title = document.getElementById('broadcastTitle').value.trim();
+            const message = document.getElementById('broadcastMessage').value.trim();
+            const target = document.getElementById('broadcastTarget').value;
+            if (!message) { showToast('Escribe un mensaje', 'error'); return; }
+
+            const res = await apiCall('/api/broadcasts', 'POST', { title, message, target });
+            if (res.ok) {
+                showToast('Borrador guardado');
+                setTimeout(() => location.reload(), 800);
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        async function createAndSendBroadcast() {
+            const title = document.getElementById('broadcastTitle').value.trim();
+            const message = document.getElementById('broadcastMessage').value.trim();
+            const target = document.getElementById('broadcastTarget').value;
+            if (!message) { showToast('Escribe un mensaje', 'error'); return; }
+
+            const targetLabels = {all:'todos los usuarios', subscribers:'suscriptores', premium:'premium', verified:'verificados'};
+            if (!confirm('Enviar broadcast a ' + targetLabels[target] + '?')) return;
+
+            const res = await apiCall('/api/broadcasts', 'POST', { title, message, target });
+            if (!res.ok) { showToast(res.error || 'Error creando', 'error'); return; }
+
+            showToast('Enviando...');
+            const sendRes = await apiCall('/api/broadcasts/' + res.id + '/send', 'POST');
+            if (sendRes.ok) {
+                showToast('Enviado: ' + sendRes.sent + ' exitosos, ' + sendRes.failed + ' fallidos');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showToast(sendRes.error || 'Error enviando', 'error');
+            }
+        }
+
+        async function sendBroadcast(id) {
+            if (!confirm('Enviar este broadcast?')) return;
+            showToast('Enviando...');
+            const res = await apiCall('/api/broadcasts/' + id + '/send', 'POST');
+            if (res.ok) {
+                showToast('Enviado: ' + res.sent + ' exitosos, ' + res.failed + ' fallidos');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        async function deleteBroadcast(id) {
+            if (!confirm('Eliminar este broadcast?')) return;
+            const res = await apiCall('/api/broadcasts/' + id, 'DELETE');
+            if (res.ok) {
+                document.getElementById('broadcast-row-' + id).remove();
+                showToast('Eliminado');
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        // ── Congresses ──
+        async function createCongress() {
+            const name = document.getElementById('congressName').value.trim();
+            if (!name) { showToast('Nombre requerido', 'error'); return; }
+
+            const res = await apiCall('/api/congresses', 'POST', {
+                name,
+                short_name: document.getElementById('congressShortName').value.trim(),
+                society: document.getElementById('congressSociety').value.trim(),
+                location: document.getElementById('congressLocation').value.trim(),
+                url: document.getElementById('congressUrl').value.trim(),
+                start_date: document.getElementById('congressStart').value,
+                end_date: document.getElementById('congressEnd').value,
+                alert_days_before: parseInt(document.getElementById('congressAlertDays').value) || 7,
+                description: document.getElementById('congressDesc').value.trim(),
+            });
+            if (res.ok) {
+                showToast('Congreso agregado');
+                setTimeout(() => location.reload(), 800);
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        async function deleteCongress(id) {
+            if (!confirm('Eliminar este congreso?')) return;
+            const res = await apiCall('/api/congresses/' + id, 'DELETE');
+            if (res.ok) {
+                document.getElementById('congress-row-' + id).remove();
+                showToast('Eliminado');
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        async function sendCongressAlerts() {
+            showToast('Verificando alertas...');
+            const res = await apiCall('/api/congresses/send-alerts', 'POST');
+            if (res.ok) {
+                if (res.sent > 0) {
+                    showToast('Alertas enviadas: ' + res.events + ' congresos, ' + res.sent + ' mensajes');
+                } else {
+                    showToast(res.message || 'No hay alertas pendientes');
+                }
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showToast(res.error || 'Error', 'error');
             }
         }
     </script>
