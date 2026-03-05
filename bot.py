@@ -972,22 +972,28 @@ async def handle_source_toggle(update, context):
         db.update_bot_user(user_id, source_preferences_json=_json.dumps(active))
         enabled_new = active
 
-    await query.edit_message_text(
-        _fuentes_text(enabled_new),
-        reply_markup=_fuentes_keyboard(enabled_new),
-    )
+    try:
+        await query.edit_message_text(
+            _fuentes_text(enabled_new),
+            reply_markup=_fuentes_keyboard(enabled_new),
+        )
+    except Exception:
+        pass  # Message unchanged
 
 
 async def handle_source_reset(update, context):
     """Reset all sources to enabled (default)."""
     query = update.callback_query
-    await query.answer("Fuentes restablecidas")
     user_id = query.from_user.id
     db.update_bot_user(user_id, source_preferences_json=None)
-    await query.edit_message_text(
-        _fuentes_text(None),
-        reply_markup=_fuentes_keyboard(None),
-    )
+    try:
+        await query.edit_message_text(
+            _fuentes_text(None),
+            reply_markup=_fuentes_keyboard(None),
+        )
+    except Exception:
+        pass  # Already showing all sources
+    await query.answer("Fuentes restablecidas")
 
 
 async def handle_voice(update, context):
