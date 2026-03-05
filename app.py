@@ -33,7 +33,10 @@ from starlette.middleware.sessions import SessionMiddleware
 import database as db
 from rag_engine import get_rag_for_expert
 from utils import generate_slug
-from auth import init_auth_db, authenticate_user, update_last_login, AuthMiddleware
+from auth import (
+    init_auth_db, authenticate_user, update_last_login, AuthMiddleware,
+    get_all_admin_users, create_admin_user, update_admin_user, delete_admin_user,
+)
 
 console = Console()
 load_dotenv(override=True)
@@ -1091,6 +1094,9 @@ async def config_page(request: Request):
     promotions = db.get_all_promotions()
     payment_mode = settings.get("payment_mode", "test")
 
+    # Admin users (for admin-only user management section)
+    admin_users = get_all_admin_users()
+
     return templates.TemplateResponse("config.html", {
         "request": request,
         "active_page": "config",
@@ -1105,7 +1111,70 @@ async def config_page(request: Request):
         "pricing_plans": pricing_plans,
         "promotions": promotions,
         "payment_mode": payment_mode,
+        "admin_users": admin_users,
     })
+
+
+# ─────────────────────────────────────────────
+# Admin user management (admin-only via RBAC middleware)
+# ─────────────────────────────────────────────
+
+@app.get("/api/admin/users")
+async def api_list_admin_users(request: Request):
+    return JSONResponse({"ok": True, "users": get_all_admin_users()})
+
+
+@app.post("/api/admin/users")
+async def api_create_admin_user(request: Request):
+    data = await request.json()
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+    display_name = data.get("display_name", "").strip()
+    role = data.get("role", "soporte")
+    if not username or not password:
+        return JSONResponse({"error": "Username y password requeridos"}, status_code=400)
+    if role not in ("admin", "soporte"):
+        return JSONResponse({"error": "Rol invalido"}, status_code=400)
+    try:
+        user_id = create_admin_user(username, password, display_name or username, role)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            return JSONResponse({"error": "El usuario ya existe"}, status_code=400)
+        raise
+    return JSONResponse({"ok": True, "id": user_id})
+
+
+@app.put("/api/admin/users/{user_id}")
+async def api_update_admin_user(request: Request, user_id: int):
+    data = await request.json()
+    updates = {}
+    if "display_name" in data:
+        updates["display_name"] = data["display_name"].strip()
+    if "role" in data and data["role"] in ("admin", "soporte"):
+        updates["role"] = data["role"]
+    if "is_active" in data:
+        updates["is_active"] = int(data["is_active"])
+    if data.get("password"):
+        updates["password"] = data["password"]
+    if not updates:
+        return JSONResponse({"error": "Nada que actualizar"}, status_code=400)
+    update_admin_user(user_id, **updates)
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def api_delete_admin_user(request: Request, user_id: int):
+    current_user = request.scope.get("user", {})
+    if current_user.get("id") == user_id:
+        return JSONResponse({"error": "No puedes desactivarte a ti mismo"}, status_code=400)
+    # Prevent deactivating the last active admin
+    all_users = get_all_admin_users()
+    active_admins = [u for u in all_users if u["role"] == "admin" and u["is_active"] and u["id"] != user_id]
+    target = next((u for u in all_users if u["id"] == user_id), None)
+    if target and target["role"] == "admin" and not active_admins:
+        return JSONResponse({"error": "No puedes desactivar al ultimo admin activo"}, status_code=400)
+    delete_admin_user(user_id)
+    return JSONResponse({"ok": True})
 
 
 @app.post("/api/settings/model")

@@ -100,6 +100,57 @@ def update_last_login(user_id: int):
     conn.close()
 
 
+def get_all_admin_users() -> list[dict]:
+    """Return all admin users (without password hashes)."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, username, display_name, role, is_active, created_at, last_login FROM admin_users ORDER BY id"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_admin_user(username: str, password: str, display_name: str, role: str) -> int:
+    conn = _get_conn()
+    cursor = conn.execute(
+        "INSERT INTO admin_users (username, password_hash, display_name, role) VALUES (?, ?, ?, ?)",
+        (username, hash_password(password), display_name, role),
+    )
+    conn.commit()
+    user_id = cursor.lastrowid
+    conn.close()
+    return user_id
+
+
+def update_admin_user(user_id: int, **kwargs):
+    allowed = {"display_name", "role", "is_active", "password"}
+    fields, values = [], []
+    for k, v in kwargs.items():
+        if k not in allowed:
+            continue
+        if k == "password":
+            fields.append("password_hash = ?")
+            values.append(hash_password(v))
+        else:
+            fields.append(f"{k} = ?")
+            values.append(v)
+    if not fields:
+        return
+    values.append(user_id)
+    conn = _get_conn()
+    conn.execute(f"UPDATE admin_users SET {', '.join(fields)} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+
+
+def delete_admin_user(user_id: int):
+    """Soft delete: deactivate the user."""
+    conn = _get_conn()
+    conn.execute("UPDATE admin_users SET is_active = 0 WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
 def get_admin_user_by_id(user_id: int) -> dict | None:
     conn = _get_conn()
     row = conn.execute(

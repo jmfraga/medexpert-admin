@@ -135,6 +135,26 @@
         .badge.green { background: #14532d; color: #4ade80; }
         .badge.red { background: #3f1219; color: #f87171; }
         .badge.amber { background: #92400e; color: #fbbf24; }
+        .badge.blue { background: #1e3a5f; color: #60a5fa; }
+
+        .admin-users-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+        }
+        .admin-users-table th {
+            text-align: left;
+            padding: 8px 10px;
+            color: #64748b;
+            font-weight: 600;
+            font-size: 0.85em;
+            border-bottom: 1px solid #1e2640;
+        }
+        .admin-users-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid #111827;
+            color: #94a3b8;
+        }
 
         .promo-row {
             display: flex;
@@ -184,6 +204,87 @@
         <div class="page-header">
             <h1>Configuracion</h1>
         </div>
+
+        {% if user and user.role == 'admin' %}
+        <div class="config-section">
+            <h2>Usuarios Admin</h2>
+            <table class="admin-users-table">
+                <thead>
+                    <tr>
+                        <th>Usuario</th>
+                        <th>Nombre</th>
+                        <th>Rol</th>
+                        <th>Estado</th>
+                        <th>Ultimo login</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="adminUsersBody">
+                    {% for u in admin_users %}
+                    <tr id="admin-user-{{ u.id }}">
+                        <td style="color:#e0e6ed; font-family:monospace;">{{ u.username }}</td>
+                        <td>{{ u.display_name }}</td>
+                        <td>
+                            {% if u.role == 'admin' %}
+                                <span class="badge amber">admin</span>
+                            {% else %}
+                                <span class="badge blue">soporte</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if u.is_active %}
+                                <span class="badge green">Activo</span>
+                            {% else %}
+                                <span class="badge red">Inactivo</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size:0.85em; color:#475569;">{{ u.last_login[:16] if u.last_login else 'Nunca' }}</td>
+                        <td>
+                            <button class="btn" onclick="editAdminUser({{ u.id }}, '{{ u.username }}', '{{ u.display_name }}', '{{ u.role }}')" style="padding:2px 8px; font-size:0.75em;">Editar</button>
+                            {% if u.is_active %}
+                            <button class="btn danger" onclick="deactivateAdminUser({{ u.id }}, '{{ u.username }}')" style="padding:2px 8px; font-size:0.75em;">Desactivar</button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div style="margin-top:12px;">
+                <button class="btn success" onclick="openAdminUserModal()">Nuevo usuario</button>
+            </div>
+        </div>
+
+        <!-- Admin User Modal -->
+        <div class="modal-overlay" id="adminUserModal">
+            <div class="modal">
+                <h3 id="adminUserModalTitle">Nuevo usuario admin</h3>
+                <input type="hidden" id="adminUserEditId" value="">
+                <div class="form-group">
+                    <label>Usuario</label>
+                    <input type="text" id="adminUserUsername" placeholder="usuario">
+                </div>
+                <div class="form-group">
+                    <label>Nombre</label>
+                    <input type="text" id="adminUserDisplayName" placeholder="Nombre completo">
+                </div>
+                <div class="form-group">
+                    <label>Contrasena <span id="adminUserPwdHint" style="color:#475569;"></span></label>
+                    <input type="password" id="adminUserPassword" placeholder="********">
+                </div>
+                <div class="form-group">
+                    <label>Rol</label>
+                    <select id="adminUserRole">
+                        <option value="admin">Admin</option>
+                        <option value="soporte">Soporte</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" onclick="closeAdminUserModal()">Cancelar</button>
+                    <button class="btn success" onclick="saveAdminUser()">Guardar</button>
+                </div>
+            </div>
+        </div>
+        {% endif %}
 
         <div class="config-section">
             <h2>API Keys <span class="save-status" id="keySaveStatus">Guardado</span></h2>
@@ -379,6 +480,73 @@
 
 {% block scripts %}
     <script>
+        // ── Admin User Management ──
+        function openAdminUserModal(editId, username, displayName, role) {
+            document.getElementById('adminUserEditId').value = editId || '';
+            document.getElementById('adminUserUsername').value = username || '';
+            document.getElementById('adminUserUsername').disabled = !!editId;
+            document.getElementById('adminUserDisplayName').value = displayName || '';
+            document.getElementById('adminUserPassword').value = '';
+            document.getElementById('adminUserRole').value = role || 'soporte';
+            document.getElementById('adminUserModalTitle').textContent = editId ? 'Editar usuario' : 'Nuevo usuario admin';
+            document.getElementById('adminUserPwdHint').textContent = editId ? '(dejar vacio para no cambiar)' : '';
+            document.getElementById('adminUserModal').classList.add('show');
+        }
+
+        function editAdminUser(id, username, displayName, role) {
+            openAdminUserModal(id, username, displayName, role);
+        }
+
+        function closeAdminUserModal() {
+            document.getElementById('adminUserModal').classList.remove('show');
+        }
+
+        async function saveAdminUser() {
+            const editId = document.getElementById('adminUserEditId').value;
+            const username = document.getElementById('adminUserUsername').value.trim();
+            const displayName = document.getElementById('adminUserDisplayName').value.trim();
+            const password = document.getElementById('adminUserPassword').value;
+            const role = document.getElementById('adminUserRole').value;
+
+            if (!editId && (!username || !password)) {
+                showToast('Usuario y contrasena requeridos', 'error');
+                return;
+            }
+
+            let res;
+            if (editId) {
+                const body = { display_name: displayName, role };
+                if (password) body.password = password;
+                res = await apiCall('/api/admin/users/' + editId, 'PUT', body);
+            } else {
+                res = await apiCall('/api/admin/users', 'POST', { username, password, display_name: displayName, role });
+            }
+
+            if (res && res.ok) {
+                showToast(editId ? 'Usuario actualizado' : 'Usuario creado');
+                closeAdminUserModal();
+                setTimeout(() => location.reload(), 600);
+            } else if (res) {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        async function deactivateAdminUser(id, username) {
+            if (!confirm('Desactivar al usuario "' + username + '"?')) return;
+            const res = await apiCall('/api/admin/users/' + id, 'DELETE');
+            if (res && res.ok) {
+                showToast('Usuario desactivado');
+                setTimeout(() => location.reload(), 600);
+            } else if (res) {
+                showToast(res.error || 'Error', 'error');
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeAdminUserModal();
+        });
+
+        // ── Config Settings ──
         function onProviderChange() {
             const provider = document.getElementById('providerSelect').value;
             const modelSel = document.getElementById('modelSelect');
