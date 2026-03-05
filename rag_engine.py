@@ -191,17 +191,21 @@ class RAGEngine:
         except Exception as e:
             return f"(Error consultando guias: {e})"
 
-    def search_detailed(self, query: str, n_results: int = 5) -> list[dict]:
+    def search_detailed(self, query: str, n_results: int = 5,
+                         where: dict | None = None) -> list[dict]:
         """Search with full metadata and scores. For admin/debugging."""
         if not self._initialized or self.collection is None:
             return []
 
         try:
-            results = self.collection.query(
+            query_kwargs = dict(
                 query_texts=[query],
                 n_results=min(n_results, self.collection.count()),
                 include=["documents", "metadatas", "distances"],
             )
+            if where:
+                query_kwargs["where"] = where
+            results = self.collection.query(**query_kwargs)
 
             hits = []
             for doc, meta, dist in zip(

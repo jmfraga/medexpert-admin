@@ -767,6 +767,7 @@
                 queries: {{ u.query_count|default(0, true) }},
                 referral: "{{ u.referral_code|default('', true)|e }}",
                 created: "{{ (u.created_at|default('', true))[:16] }}",
+                sources: {{ u.source_preferences_json|default('null', true)|safe }},
             },
             {% endfor %}
         };
@@ -802,6 +803,11 @@
             const u = usersData[telegramId];
             if (!u) return;
             document.getElementById('userDetailTitle').textContent = u.name;
+            const allSources = ['NCCN', 'ESMO', 'NCI', 'IMSS'];
+            const activeSources = u.sources || allSources;
+            let srcCheckboxes = allSources.map(s =>
+                `<label style="margin-right:10px;"><input type="checkbox" class="src-cb" value="${s}" ${activeSources.includes(s) ? 'checked' : ''}> ${s}</label>`
+            ).join('');
             document.getElementById('userDetailContent').innerHTML =
                 '<b>Telegram ID:</b> ' + telegramId + '<br>' +
                 '<b>Username:</b> @' + (u.username || 'N/A') + '<br>' +
@@ -813,7 +819,9 @@
                 (u.stripe ? '<b>Stripe:</b> ' + u.stripe + '<br>' : '') +
                 '<b>Consultas:</b> ' + u.queries + '<br>' +
                 (u.referral ? '<b>Referido:</b> ' + u.referral + '<br>' : '') +
-                '<b>Registro:</b> ' + u.created;
+                '<b>Registro:</b> ' + u.created + '<br><br>' +
+                '<b>Fuentes RAG:</b><br>' + srcCheckboxes +
+                '<br><button class="btn" style="margin-top:6px;padding:3px 10px;font-size:0.78em;" onclick="saveSources(' + telegramId + ')">Guardar fuentes</button>';
             document.getElementById('notifyUserBtn').style.display = 'inline-block';
             document.getElementById('notifyUserBtn').onclick = function() {
                 closeUserDetail();
@@ -827,6 +835,20 @@
 
         function closeUserDetail() {
             document.getElementById('userDetailModal').classList.remove('show');
+        }
+
+        async function saveSources(telegramId) {
+            const allSources = ['NCCN', 'ESMO', 'NCI', 'IMSS'];
+            const checked = [...document.querySelectorAll('.src-cb:checked')].map(cb => cb.value);
+            if (checked.length === 0) { showToast('Selecciona al menos 1 fuente', 'error'); return; }
+            const sources = checked.length === allSources.length ? null : checked;
+            const res = await apiCall('/api/bot/users/' + telegramId + '/sources', 'PUT', { sources });
+            if (res.ok) {
+                usersData[telegramId].sources = sources;
+                showToast('Fuentes actualizadas');
+            } else {
+                showToast(res.error || 'Error', 'error');
+            }
         }
 
         async function sendNotification() {

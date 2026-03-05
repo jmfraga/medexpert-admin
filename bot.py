@@ -42,6 +42,15 @@ FREE_QUERY_LIMIT = 5
 PAID_DEEPEN_LIMIT_MONTHLY = 10  # Max deepenings per month for paid tier
 DISCLAIMER_SHOWN_KEY = "disclaimer_shown"
 
+# Source preference constants
+_ALL_SOURCES = ["NCCN", "ESMO", "NCI", "IMSS"]
+_SOURCE_LABELS = {
+    "NCCN": "NCCN (Natl. Comprehensive Cancer Network)",
+    "ESMO": "ESMO (European Society Medical Oncology)",
+    "NCI": "NCI/PDQ (National Cancer Institute)",
+    "IMSS": "IMSS/GPC (Guias Practica Clinica)",
+}
+
 # LLM brain (initialized on first query per specialty)
 _brains: dict[str, BotBrain] = {}
 
@@ -884,6 +893,103 @@ async def handle_pay_clip(update, context):
         await query.message.reply_text("Error con Clip. Intenta Mercado Pago o Stripe.")
 
 
+# ─────────────────────────────────────────────
+# Source Preferences (/fuentes)
+# ─────────────────────────────────────────────
+
+def _build_source_filter(telegram_id: int) -> dict | None:
+    """Build ChromaDB where filter from user's source preferences."""
+    user_sources = db.get_bot_user_sources(telegram_id)
+    if user_sources:
+        return {"society": {"$in": user_sources}}
+    return None
+
+
+def _fuentes_keyboard(enabled: list[str] | None):
+    """Build inline keyboard for source toggles."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    active = set(enabled) if enabled else set(_ALL_SOURCES)
+    rows = []
+    for src in _ALL_SOURCES:
+        icon = "✅" if src in active else "⬜"
+        rows.append([InlineKeyboardButton(f"{icon} {src}", callback_data=f"src_{src}")])
+    rows.append([InlineKeyboardButton("Restablecer todas", callback_data="src_reset")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _fuentes_text(enabled: list[str] | None) -> str:
+    """Build display text for current source preferences."""
+    active = set(enabled) if enabled else set(_ALL_SOURCES)
+    lines = ["📚 Tus fuentes activas:\n"]
+    for src in _ALL_SOURCES:
+        icon = "✅" if src in active else "⬜"
+        lines.append(f"{icon} {_SOURCE_LABELS[src]}")
+    lines.append("\nToca una fuente para activar/desactivar.")
+    return "\n".join(lines)
+
+
+async def cmd_fuentes(update, context):
+    """Show source preference toggles."""
+    user = update.effective_user
+    db.get_or_create_bot_user(
+        telegram_id=user.id,
+        username=user.username or "",
+        first_name=user.first_name or "",
+        specialty=context.bot_data.get("specialty", "oncologia"),
+    )
+    enabled = db.get_bot_user_sources(user.id)
+    await update.message.reply_text(
+        _fuentes_text(enabled),
+        reply_markup=_fuentes_keyboard(enabled),
+    )
+
+
+async def handle_source_toggle(update, context):
+    """Toggle a single source on/off."""
+    query = update.callback_query
+    await query.answer()
+    src = query.data.replace("src_", "")
+    if src not in _ALL_SOURCES:
+        return
+
+    user_id = query.from_user.id
+    enabled = db.get_bot_user_sources(user_id)
+    active = list(enabled) if enabled else list(_ALL_SOURCES)
+
+    if src in active:
+        if len(active) <= 1:
+            await query.answer("Debes tener al menos 1 fuente activa.", show_alert=True)
+            return
+        active.remove(src)
+    else:
+        active.append(src)
+
+    # If all enabled, store NULL (default)
+    if set(active) == set(_ALL_SOURCES):
+        db.update_bot_user(user_id, source_preferences_json=None)
+        enabled_new = None
+    else:
+        db.update_bot_user(user_id, source_preferences_json=_json.dumps(active))
+        enabled_new = active
+
+    await query.edit_message_text(
+        _fuentes_text(enabled_new),
+        reply_markup=_fuentes_keyboard(enabled_new),
+    )
+
+
+async def handle_source_reset(update, context):
+    """Reset all sources to enabled (default)."""
+    query = update.callback_query
+    await query.answer("Fuentes restablecidas")
+    user_id = query.from_user.id
+    db.update_bot_user(user_id, source_preferences_json=None)
+    await query.edit_message_text(
+        _fuentes_text(None),
+        reply_markup=_fuentes_keyboard(None),
+    )
+
+
 async def handle_voice(update, context):
     """Process voice message: download → transcribe → query → respond."""
     user = update.effective_user
@@ -944,9 +1050,10 @@ async def handle_voice(update, context):
             f"Audio transcrito ({duration}s)\nBuscando en guias clinicas..."
         )
 
-        # Query RAG + LLM
+        # Query RAG + LLM (with user source filter)
         brain = get_brain()
-        result = brain.query(transcript, expert_slug=specialty)
+        source_filter = _build_source_filter(user.id)
+        result = brain.query(transcript, expert_slug=specialty, source_filter=source_filter)
 
         # Extract clinical metadata
         metadata = extract_clinical_metadata(transcript, result.get("response", ""), specialty)
@@ -1083,9 +1190,10 @@ async def handle_text(update, context):
     try:
         logger.info(f"Text from {user.id}: '{text[:80]}...'")
 
-        # Query RAG + LLM
+        # Query RAG + LLM (with user source filter)
         brain = get_brain()
-        result = brain.query(text, expert_slug=specialty)
+        source_filter = _build_source_filter(user.id)
+        result = brain.query(text, expert_slug=specialty, source_filter=source_filter)
 
         # Extract clinical metadata
         metadata = extract_clinical_metadata(text, result.get("response", ""), specialty)
@@ -1283,11 +1391,13 @@ async def handle_deepen_callback(update, context):
 
     try:
         brain = get_brain()
+        source_filter = _build_source_filter(user_id)
         result = brain.deepen(
             original_query=consultation["query_text"],
             original_response=consultation["response_text"],
             expert_slug=specialty,
             tier=tier,
+            source_filter=source_filter,
         )
 
         # Extract clinical metadata from deepened response
@@ -1547,6 +1657,7 @@ def main():
     app.add_handler(CommandHandler("suscribir", cmd_suscribir))
     app.add_handler(CommandHandler("verificar", cmd_verificar))
     app.add_handler(CommandHandler("congresos", cmd_congresos))
+    app.add_handler(CommandHandler("fuentes", cmd_fuentes))
 
     # Photo/document handler for verification flow
     async def handle_photo_or_doc(update, context):
@@ -1574,6 +1685,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_pay_mp, pattern=r"^pay_mp_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_paypal, pattern=r"^pay_paypal_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_clip, pattern=r"^pay_clip_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_source_toggle, pattern=r"^src_(NCCN|ESMO|NCI|IMSS)$"))
+    app.add_handler(CallbackQueryHandler(handle_source_reset, pattern=r"^src_reset$"))
 
     # Error handler
     app.add_error_handler(handle_error)
@@ -1588,6 +1701,7 @@ def main():
             BotCommand("suscribir", "Ver planes de suscripcion"),
             BotCommand("verificar", "Verificar cedula profesional"),
             BotCommand("congresos", "Proximos congresos medicos"),
+            BotCommand("fuentes", "Elegir fuentes de guias clinicas"),
             BotCommand("soporte", "Contactar soporte"),
             BotCommand("terminos", "Terminos y condiciones"),
             BotCommand("cancelar", "Cancelar accion en curso"),

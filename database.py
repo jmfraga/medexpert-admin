@@ -392,6 +392,7 @@ def init_db():
         ("verification_status", "TEXT DEFAULT 'none'"),
         ("verification_notes", "TEXT DEFAULT ''"),
         ("verified_at", "TEXT DEFAULT NULL"),
+        ("source_preferences_json", "TEXT DEFAULT NULL"),
     ]:
         try:
             conn.execute(f"ALTER TABLE bot_users ADD COLUMN {col} {defn}")
@@ -1064,16 +1065,30 @@ def get_bot_user(telegram_id: int) -> dict | None:
 def update_bot_user(telegram_id: int, **kwargs):
     conn = get_connection()
     allowed = {"username", "first_name", "last_name", "specialty",
-               "is_verified", "referred_by", "last_activity", "email"}
+               "is_verified", "referred_by", "last_activity", "email",
+               "source_preferences_json"}
+    nullable = {"source_preferences_json"}
     updates, params = [], []
     for key, val in kwargs.items():
-        if key in allowed and val is not None:
+        if key in allowed and (val is not None or key in nullable):
             updates.append(f"{key} = ?"); params.append(val)
     if updates:
         params.append(telegram_id)
         conn.execute(f"UPDATE bot_users SET {', '.join(updates)} WHERE telegram_id = ?", params)
         conn.commit()
     conn.close()
+
+
+def get_bot_user_sources(telegram_id: int) -> list[str] | None:
+    """Return user's enabled source societies, or None if all enabled (default)."""
+    user = get_bot_user(telegram_id)
+    if not user or not user.get("source_preferences_json"):
+        return None
+    try:
+        sources = json.loads(user["source_preferences_json"])
+        return sources if isinstance(sources, list) and sources else None
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
 def count_bot_free_queries(telegram_id: int, specialty: str) -> int:

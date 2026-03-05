@@ -152,7 +152,8 @@ class BotBrain:
         except Exception as e:
             logger.error(f"LLM client init error: {e}")
 
-    def query(self, text: str, expert_slug: str) -> dict:
+    def query(self, text: str, expert_slug: str,
+              source_filter: dict | None = None) -> dict:
         """Run a clinical query: RAG search + LLM reasoning.
 
         Returns dict with: status, response, rag_context, provider, model,
@@ -172,9 +173,9 @@ class BotBrain:
         # NCCN/ESMO guidelines are in English, IMSS in Spanish.
         # Without bilingual search, cosine similarity always favors same-language chunks.
         rag = get_rag_for_expert(expert_slug)
-        rag_es = rag.search_detailed(expanded_text, n_results=15)
+        rag_es = rag.search_detailed(expanded_text, n_results=15, where=source_filter)
         english_query = _translate_query_to_english(expanded_text)
-        rag_en = rag.search_detailed(english_query, n_results=15) if english_query else []
+        rag_en = rag.search_detailed(english_query, n_results=15, where=source_filter) if english_query else []
         logger.info(f"RAG: {len(rag_es)} ES hits + {len(rag_en)} EN hits")
 
         # Merge results, deduplicate by (source + text[:100])
@@ -273,7 +274,8 @@ class BotBrain:
         return result
 
     def deepen(self, original_query: str, original_response: str,
-               expert_slug: str, tier: str = "free") -> dict:
+               expert_slug: str, tier: str = "free",
+               source_filter: dict | None = None) -> dict:
         """Deepen a previous response with a more powerful model.
 
         Tiers:
@@ -309,9 +311,9 @@ class BotBrain:
         # Re-do RAG search for fresh context (with synonym expansion)
         expanded_query = _expand_synonyms(original_query, expert_slug)
         rag = get_rag_for_expert(expert_slug)
-        rag_es = rag.search_detailed(expanded_query, n_results=15)
+        rag_es = rag.search_detailed(expanded_query, n_results=15, where=source_filter)
         english_query = _translate_query_to_english(expanded_query)
-        rag_en = rag.search_detailed(english_query, n_results=15) if english_query else []
+        rag_en = rag.search_detailed(english_query, n_results=15, where=source_filter) if english_query else []
 
         seen = set()
         merged = []

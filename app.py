@@ -859,6 +859,25 @@ async def notify_bot_user(telegram_id: int, request: Request):
         return JSONResponse({"ok": False, "error": str(e)})
 
 
+@app.get("/api/bot/users/{telegram_id}/sources")
+async def get_bot_user_sources(telegram_id: int):
+    sources = db.get_bot_user_sources(telegram_id)
+    return JSONResponse({"ok": True, "sources": sources})
+
+
+@app.put("/api/bot/users/{telegram_id}/sources")
+async def update_bot_user_sources(telegram_id: int, request: Request):
+    data = await request.json()
+    sources = data.get("sources")
+    if sources is None:
+        db.update_bot_user(telegram_id, source_preferences_json=None)
+    else:
+        if not isinstance(sources, list):
+            return JSONResponse({"ok": False, "error": "sources must be a list or null"})
+        db.update_bot_user(telegram_id, source_preferences_json=json.dumps(sources))
+    return JSONResponse({"ok": True, "sources": sources})
+
+
 # ─────────────────────────────────────────────
 # Pricing Plans Management
 # ─────────────────────────────────────────────
