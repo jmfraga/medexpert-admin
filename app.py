@@ -162,6 +162,7 @@ async def experts_page(request: Request):
         "request": request,
         "active_page": "experts",
         "experts": expert_data,
+        "available_models": AVAILABLE_MODELS,
     })
 
 
@@ -184,6 +185,14 @@ async def create_expert(request: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+@app.get("/api/experts/{expert_id}")
+async def get_expert(expert_id: int):
+    expert = db.get_expert_by_id(expert_id)
+    if not expert:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+    return JSONResponse(dict(expert))
+
+
 @app.put("/api/experts/{expert_id}")
 async def update_expert(expert_id: int, request: Request):
     data = await request.json()
@@ -192,6 +201,10 @@ async def update_expert(expert_id: int, request: Request):
         name=data.get("name"),
         system_prompt=data.get("system_prompt"),
         icon=data.get("icon"),
+        base_provider=data.get("base_provider"),
+        base_model=data.get("base_model"),
+        deepen_provider=data.get("deepen_provider"),
+        deepen_model=data.get("deepen_model"),
     )
     return JSONResponse({"ok": True})
 
@@ -770,6 +783,10 @@ AVAILABLE_MODELS = {
         {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini"},
         {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano"},
     ],
+    "groq": [
+        {"id": "openai/gpt-oss-120b", "name": "GPT-OSS 120B"},
+        {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B"},
+    ],
 }
 
 
@@ -1322,9 +1339,10 @@ async def stripe_webhook(request: Request):
     # Handle checkout completed
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
+        metadata = session.get("metadata", {})
         telegram_id = int(session.get("client_reference_id") or
-                          session.get("metadata", {}).get("telegram_id", 0))
-        plan = session.get("metadata", {}).get("plan", "basic")
+                          metadata.get("telegram_id", 0))
+        plan = metadata.get("plan", "basic")
         customer_id = session.get("customer")
 
         if telegram_id:
@@ -1334,6 +1352,13 @@ async def stripe_webhook(request: Request):
                 status="active",
                 stripe_customer_id=customer_id,
             )
+            # Track promo usage
+            promo_id_str = metadata.get("promo_id")
+            if promo_id_str:
+                promo_id = int(promo_id_str)
+                if db.validate_and_use_promo_code(promo_id):
+                    db.update_bot_user_promo(telegram_id, promo_id)
+                    logger.info(f"Promo {promo_id} applied for {telegram_id}")
             logger.info(f"Subscription activated: {telegram_id} -> {plan}")
 
     # Handle subscription cancelled/expired
@@ -1434,6 +1459,15 @@ async def mercadopago_webhook(request: Request):
                 status="active",
                 stripe_customer_id=f"mp_{data_id}",
             )
+            # Track promo usage
+            if len(parts) > 2:
+                try:
+                    promo_id = int(parts[2])
+                    if db.validate_and_use_promo_code(promo_id):
+                        db.update_bot_user_promo(telegram_id, promo_id)
+                        logger.info(f"Promo {promo_id} applied for {telegram_id}")
+                except (ValueError, IndexError):
+                    pass
             logger.info(f"MP subscription activated: {telegram_id} -> {plan}")
 
     return JSONResponse({"received": True})
@@ -1464,6 +1498,15 @@ async def clip_webhook(request: Request):
             status="active",
             stripe_customer_id=f"clip_{payment_request_id}",
         )
+        # Track promo usage
+        if len(parts) > 2:
+            try:
+                promo_id = int(parts[2])
+                if db.validate_and_use_promo_code(promo_id):
+                    db.update_bot_user_promo(telegram_id, promo_id)
+                    logger.info(f"Promo {promo_id} applied for {telegram_id}")
+            except (ValueError, IndexError):
+                pass
         logger.info(f"Clip subscription activated: {telegram_id} -> {plan}")
 
         # Notify user via Telegram

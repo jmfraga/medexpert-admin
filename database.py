@@ -393,9 +393,22 @@ def init_db():
         ("verification_notes", "TEXT DEFAULT ''"),
         ("verified_at", "TEXT DEFAULT NULL"),
         ("source_preferences_json", "TEXT DEFAULT NULL"),
+        ("applied_promo_id", "INTEGER DEFAULT NULL"),
     ]:
         try:
             conn.execute(f"ALTER TABLE bot_users ADD COLUMN {col} {defn}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+    # Per-expert LLM config columns
+    for col, defn in [
+        ("base_provider", "TEXT DEFAULT NULL"),
+        ("base_model", "TEXT DEFAULT NULL"),
+        ("deepen_provider", "TEXT DEFAULT NULL"),
+        ("deepen_model", "TEXT DEFAULT NULL"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE experts ADD COLUMN {col} {defn}")
             conn.commit()
         except sqlite3.OperationalError:
             pass
@@ -482,7 +495,9 @@ def get_expert_by_slug(slug: str) -> dict | None:
 
 
 def update_expert(expert_id: int, name: str = None, system_prompt: str = None,
-                  icon: str = None):
+                  icon: str = None, base_provider: str = None,
+                  base_model: str = None, deepen_provider: str = None,
+                  deepen_model: str = None):
     conn = get_connection()
     updates, params = [], []
     if name is not None:
@@ -491,6 +506,11 @@ def update_expert(expert_id: int, name: str = None, system_prompt: str = None,
         updates.append("system_prompt = ?"); params.append(system_prompt)
     if icon is not None:
         updates.append("icon = ?"); params.append(icon)
+    # LLM config: empty string → NULL (use global default)
+    for col, val in [("base_provider", base_provider), ("base_model", base_model),
+                     ("deepen_provider", deepen_provider), ("deepen_model", deepen_model)]:
+        if val is not None:
+            updates.append(f"{col} = ?"); params.append(val if val else None)
     if updates:
         params.append(expert_id)
         conn.execute(f"UPDATE experts SET {', '.join(updates)} WHERE id = ?", params)
@@ -505,6 +525,27 @@ def delete_expert(expert_id: int) -> bool:
     deleted = cursor.rowcount > 0
     conn.close()
     return deleted
+
+
+def get_expert_llm_config(expert_slug: str) -> dict:
+    """Get resolved LLM config for an expert (expert override or global fallback).
+
+    Returns dict with: base_provider, base_model, deepen_provider, deepen_model
+    """
+    settings = get_all_settings()
+    expert = get_expert_by_slug(expert_slug)
+
+    base_provider = (expert.get("base_provider") if expert else None) or settings.get("default_provider", "groq")
+    base_model = (expert.get("base_model") if expert else None) or settings.get("default_model", "openai/gpt-oss-120b")
+    deepen_provider = (expert.get("deepen_provider") if expert else None) or settings.get("default_deepen_provider", "anthropic")
+    deepen_model = (expert.get("deepen_model") if expert else None) or settings.get("default_deepen_model", "claude-sonnet-4-20250514")
+
+    return {
+        "base_provider": base_provider,
+        "base_model": base_model,
+        "deepen_provider": deepen_provider,
+        "deepen_model": deepen_model,
+    }
 
 
 # ─────────────────────────────────────────────
@@ -1892,6 +1933,32 @@ def validate_promo_code(code: str) -> dict | None:
 def use_promo_code(promo_id: int):
     conn = get_connection()
     conn.execute("UPDATE promotions SET used_count = used_count + 1 WHERE id = ?", (promo_id,))
+    conn.commit()
+    conn.close()
+
+
+def validate_and_use_promo_code(promo_id: int) -> bool:
+    """Atomic: re-validate promo is still valid + increment used_count.
+    Returns True if successful, False if promo expired/maxed since user applied it."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            UPDATE promotions SET used_count = used_count + 1
+            WHERE id = ? AND is_active = 1
+            AND (max_uses = 0 OR used_count < max_uses)
+            AND (valid_until IS NULL OR valid_until >= datetime('now'))
+        """, (promo_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_bot_user_promo(telegram_id: int, promo_id: int):
+    """Store which promo code a user redeemed."""
+    conn = get_connection()
+    conn.execute("UPDATE bot_users SET applied_promo_id = ? WHERE telegram_id = ?",
+                 (promo_id, telegram_id))
     conn.commit()
     conn.close()
 

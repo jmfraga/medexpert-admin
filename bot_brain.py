@@ -118,10 +118,13 @@ def _expand_synonyms(text: str, expert_slug: str) -> str:
 class BotBrain:
     """Clinical consultation engine for Telegram bot queries."""
 
-    def __init__(self, provider: str = None, model: str = None):
+    def __init__(self, provider: str = None, model: str = None,
+                 deepen_provider: str = None, deepen_model: str = None):
         settings = db.get_all_settings()
         self.provider = provider or settings.get("default_provider", "groq")
         self.model = model or settings.get("default_model", "openai/gpt-oss-120b")
+        self.deepen_provider = deepen_provider or settings.get("default_deepen_provider", "anthropic")
+        self.deepen_model = deepen_model or settings.get("default_deepen_model", "claude-sonnet-4-20250514")
         self.client = None
         self._init_client()
 
@@ -273,39 +276,51 @@ class BotBrain:
 
         return result
 
+    def _build_client(self, provider: str):
+        """Build an LLM client for the given provider."""
+        if provider == "anthropic":
+            from anthropic import Anthropic
+            return Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        elif provider == "groq":
+            from openai import OpenAI
+            return OpenAI(
+                base_url="https://api.groq.com/openai/v1",
+                api_key=os.getenv("GROQ_API_KEY"),
+            )
+        elif provider == "openai":
+            from openai import OpenAI
+            return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        elif provider == "ollama":
+            from openai import OpenAI
+            ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+            return OpenAI(base_url=ollama_url, api_key="ollama")
+        else:
+            logger.error(f"Unknown deepen provider: {provider}")
+            return None
+
     def deepen(self, original_query: str, original_response: str,
                expert_slug: str, tier: str = "free",
-               source_filter: dict | None = None) -> dict:
+               source_filter: dict | None = None,
+               followup_question: str = None) -> dict:
         """Deepen a previous response with a more powerful model.
 
         Tiers:
-          - "free": GPT-OSS 120B via Groq (~3s, no cost)
-          - "basic": Claude Sonnet via Anthropic (~5s, low cost)
-          - "premium": Claude Opus 4.6 (~30s, highest quality)
+          - "free": base model (self.provider / self.model)
+          - "basic" / "premium": deepen model (self.deepen_provider / self.deepen_model)
         """
         start = time.time()
 
         # Select model based on tier
-        if tier == "premium":
-            from anthropic import Anthropic
-            client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-            deepen_provider = "anthropic"
-            deepen_model = "claude-opus-4-6"
-            max_tokens = 3000
-        elif tier == "basic":
-            from anthropic import Anthropic
-            client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-            deepen_provider = "anthropic"
-            deepen_model = "claude-sonnet-4-20250514"
-            max_tokens = 2500
+        if tier in ("premium", "basic"):
+            deepen_provider = self.deepen_provider
+            deepen_model = self.deepen_model
+            client = self._build_client(deepen_provider)
+            max_tokens = 3000 if tier == "premium" else 2500
         else:
-            from openai import OpenAI
-            client = OpenAI(
-                base_url="https://api.groq.com/openai/v1",
-                api_key=os.getenv("GROQ_API_KEY"),
-            )
-            deepen_provider = "groq"
-            deepen_model = "openai/gpt-oss-120b"
+            # Free: use base model
+            deepen_provider = self.provider
+            deepen_model = self.model
+            client = self._build_client(deepen_provider)
             max_tokens = 2000
 
         # Re-do RAG search for fresh context (with synonym expansion)
@@ -356,24 +371,45 @@ class BotBrain:
             f"GUIAS CLINICAS DISPONIBLES:\n{rag_context}"
         )
 
-        user_message = (
-            f"CONSULTA ORIGINAL:\n{original_query}\n\n"
-            f"RESPUESTA PREVIA (a profundizar):\n{original_response}\n\n"
-            "INSTRUCCIONES:\n"
-            "- Profundiza y expande la respuesta anterior con mas detalle clinico\n"
-            "- No repitas lo mismo, agrega informacion nueva y mas especifica\n"
-            "- Incluye niveles de evidencia y grados de recomendacion\n"
-            "- Menciona estudios clinicos clave si los hay en las guias\n"
-            "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO]\n"
-            "- Responde en español medico profesional\n\n"
-            "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
-            "- PROHIBIDO usar # ## ### para encabezados\n"
-            "- PROHIBIDO usar tablas con | o ---\n"
-            "- PROHIBIDO usar ** para negritas ni ningun markdown\n"
-            "- Titulos de seccion en MAYUSCULAS seguido de dos puntos\n"
-            "- Listas con viñetas • y sub-listas con guion -\n"
-            "- Separar secciones con linea en blanco"
-        )
+        if followup_question:
+            user_message = (
+                f"CONSULTA ORIGINAL:\n{original_query}\n\n"
+                f"RESPUESTA PREVIA:\n{original_response}\n\n"
+                f"PREGUNTA ESPECIFICA DEL MEDICO:\n{followup_question}\n\n"
+                "INSTRUCCIONES:\n"
+                "- Responde enfocandote en la pregunta especifica del medico\n"
+                "- Usa la consulta original y respuesta previa como contexto\n"
+                "- Incluye niveles de evidencia y grados de recomendacion\n"
+                "- Menciona estudios clinicos clave si los hay en las guias\n"
+                "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO]\n"
+                "- Responde en español medico profesional\n\n"
+                "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
+                "- PROHIBIDO usar # ## ### para encabezados\n"
+                "- PROHIBIDO usar tablas con | o ---\n"
+                "- PROHIBIDO usar ** para negritas ni ningun markdown\n"
+                "- Titulos de seccion en MAYUSCULAS seguido de dos puntos\n"
+                "- Listas con viñetas • y sub-listas con guion -\n"
+                "- Separar secciones con linea en blanco"
+            )
+        else:
+            user_message = (
+                f"CONSULTA ORIGINAL:\n{original_query}\n\n"
+                f"RESPUESTA PREVIA (a profundizar):\n{original_response}\n\n"
+                "INSTRUCCIONES:\n"
+                "- Profundiza y expande la respuesta anterior con mas detalle clinico\n"
+                "- No repitas lo mismo, agrega informacion nueva y mas especifica\n"
+                "- Incluye niveles de evidencia y grados de recomendacion\n"
+                "- Menciona estudios clinicos clave si los hay en las guias\n"
+                "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO]\n"
+                "- Responde en español medico profesional\n\n"
+                "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
+                "- PROHIBIDO usar # ## ### para encabezados\n"
+                "- PROHIBIDO usar tablas con | o ---\n"
+                "- PROHIBIDO usar ** para negritas ni ningun markdown\n"
+                "- Titulos de seccion en MAYUSCULAS seguido de dos puntos\n"
+                "- Listas con viñetas • y sub-listas con guion -\n"
+                "- Separar secciones con linea en blanco"
+            )
 
         try:
             if deepen_provider == "anthropic":

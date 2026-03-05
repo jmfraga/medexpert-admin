@@ -55,11 +55,20 @@ _SOURCE_LABELS = {
 _brains: dict[str, BotBrain] = {}
 
 
-def get_brain() -> BotBrain:
-    """Get or create a BotBrain instance (re-reads settings each time for model changes)."""
-    if "brain" not in _brains:
-        _brains["brain"] = BotBrain()
-    return _brains["brain"]
+def get_brain(expert_slug: str = "oncologia") -> BotBrain:
+    """Get or create a BotBrain instance per expert. Re-creates if config changed."""
+    config = db.get_expert_llm_config(expert_slug)
+    cache_key = f"{expert_slug}:{config['base_provider']}:{config['base_model']}:{config['deepen_provider']}:{config['deepen_model']}"
+    if cache_key not in _brains:
+        # Clear old entries for this expert
+        _brains.clear()
+        _brains[cache_key] = BotBrain(
+            provider=config["base_provider"],
+            model=config["base_model"],
+            deepen_provider=config["deepen_provider"],
+            deepen_model=config["deepen_model"],
+        )
+    return _brains[cache_key]
 
 
 # ─────────────────────────────────────────────
@@ -86,6 +95,7 @@ async def cmd_start(update, context):
     if context.args:
         arg = context.args[0]
         if arg == "payment_success":
+            context.user_data.pop("promo", None)
             await update.message.reply_text(
                 "Pago recibido! Tu suscripcion se activara en unos momentos.\n"
                 "Usa /estado para verificar."
@@ -270,7 +280,7 @@ async def cmd_soporte(update, context):
 async def cmd_cancelar(update, context):
     """Handle /cancelar — cancel any pending action."""
     cancelled = False
-    for key in ("awaiting_support", "awaiting_email", "awaiting_verification"):
+    for key in ("awaiting_support", "awaiting_email", "awaiting_verification", "promo", "pending_deepen"):
         if context.user_data.pop(key, None):
             cancelled = True
     if cancelled:
@@ -411,27 +421,32 @@ async def cmd_suscribir(update, context):
         )
         return
 
-    keyboard = [
-        [InlineKeyboardButton(
-            "Basico - $14.99 USD/mes",
-            callback_data="subscribe_basic_monthly",
-        )],
-        [InlineKeyboardButton(
-            "Basico - $149.90 USD/año (2 meses gratis)",
-            callback_data="subscribe_basic_annual",
-        )],
-        [InlineKeyboardButton(
-            "Premium - $24.99 USD/mes",
-            callback_data="subscribe_premium_monthly",
-        )],
-        [InlineKeyboardButton(
-            "Premium - $249.90 USD/año (2 meses gratis)",
-            callback_data="subscribe_premium_annual",
-        )],
-    ]
+    promo = context.user_data.get("promo")
+    prices = get_plan_prices()
+
+    keyboard = []
+    for key in ("basic_monthly", "basic_annual", "premium_monthly", "premium_annual"):
+        info = prices[key]
+        d_usd, _, pid = apply_promo_discount(promo, key, info["usd"], info["mxn"])
+        if pid:
+            label = f"{info['label']} - ${d_usd:.2f} USD (antes ${info['usd']:.2f})"
+        else:
+            label = f"{info['label']} - ${info['usd']:.2f} USD"
+            if "annual" in key:
+                label += " (2 meses gratis)"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"subscribe_{key}")])
+
+    promo_banner = ""
+    if promo:
+        if promo.get("discount_percent", 0) > 0:
+            promo_banner = f"\nCodigo <b>{promo['code']}</b> aplicado: {promo['discount_percent']}% descuento\n"
+        elif promo.get("discount_amount_usd", 0) > 0:
+            promo_banner = f"\nCodigo <b>{promo['code']}</b> aplicado: ${promo['discount_amount_usd']:.2f} USD descuento\n"
+    hint = "" if promo else "\n<i>¿Tienes un codigo? Usa /codigo CODIGO antes de elegir plan</i>\n"
 
     await update.message.reply_text(
-        "<b>Suscripciones MedExpert</b>\n\n"
+        "<b>Suscripciones MedExpert</b>\n"
+        f"{promo_banner}{hint}\n"
         "<b>Plan Basico</b> (precio de lanzamiento)\n"
         "  Consultas ilimitadas\n"
         "  Profundizar con GPT-OSS 120B\n"
@@ -466,6 +481,76 @@ def get_plan_prices():
 PLAN_PRICES = get_plan_prices()
 
 
+def apply_promo_discount(promo, plan_key, usd, mxn):
+    """Apply promo discount to prices.
+    Returns (discounted_usd, discounted_mxn, promo_id) or originals with None."""
+    if not promo:
+        return usd, mxn, None
+    applies_to = promo.get("applies_to", "all")
+    if applies_to != "all":
+        plan_base = plan_key.split("_")[0]  # "basic" or "premium"
+        if plan_base not in applies_to:
+            return usd, mxn, None
+    promo_id = promo["id"]
+    if promo.get("discount_percent", 0) > 0:
+        factor = 1 - (promo["discount_percent"] / 100)
+        return round(usd * factor, 2), round(mxn * factor, 0), promo_id
+    elif promo.get("discount_amount_usd", 0) > 0:
+        discount_usd = promo["discount_amount_usd"]
+        discount_mxn = discount_usd * 20  # Rough USD→MXN rate
+        return max(0.01, round(usd - discount_usd, 2)), max(1, round(mxn - discount_mxn, 0)), promo_id
+    return usd, mxn, None
+
+
+async def cmd_codigo(update, context):
+    """Handle /codigo CODE — apply a promo code before subscribing."""
+    user = update.effective_user
+
+    if not context.args:
+        await update.message.reply_text(
+            "Uso: /codigo CODIGO\n"
+            "Ejemplo: /codigo TEST20"
+        )
+        return
+
+    current_plan = db.get_bot_user_plan(user.id)
+    if current_plan in ("basic", "premium"):
+        await update.message.reply_text(
+            "Ya tienes una suscripcion activa. Los codigos son solo para nuevas suscripciones."
+        )
+        return
+
+    code = context.args[0].strip().upper()
+    promo = db.validate_promo_code(code)
+
+    if not promo:
+        await update.message.reply_text(
+            "Codigo no valido o expirado.\n"
+            "Verifica e intenta de nuevo."
+        )
+        return
+
+    context.user_data["promo"] = promo
+
+    if promo.get("discount_percent", 0) > 0:
+        desc = f"{promo['discount_percent']}% de descuento"
+    elif promo.get("discount_amount_usd", 0) > 0:
+        desc = f"${promo['discount_amount_usd']:.2f} USD de descuento"
+    else:
+        desc = promo.get("description", "Descuento aplicado")
+
+    scope = ""
+    applies = promo.get("applies_to", "all")
+    if applies != "all":
+        scope = f"\nAplica a: Plan {applies.capitalize()}"
+
+    await update.message.reply_text(
+        f"Codigo <b>{code}</b> aplicado: {desc}{scope}\n\n"
+        "Ahora usa /suscribir para ver los precios con descuento.",
+        parse_mode="HTML",
+    )
+
+
 async def handle_subscribe_callback(update, context):
     """Handle subscription plan selection — ask country for smart payment routing."""
     global PLAN_PRICES
@@ -481,16 +566,15 @@ async def handle_subscribe_callback(update, context):
         await query.message.reply_text("Plan no disponible.")
         return
 
+    promo = context.user_data.get("promo")
+    d_usd, d_mxn, pid = apply_promo_discount(promo, plan_key, price_info["usd"], price_info["mxn"])
+
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    mx_label = f"Mexico - ${d_mxn:.0f} MXN" if pid else f"Mexico - ${price_info['mxn']:.0f} MXN"
+    intl_label = f"Internacional - ${d_usd:.2f} USD" if pid else f"Internacional - ${price_info['usd']:.2f} USD"
     keyboard = [
-        [InlineKeyboardButton(
-            f"Mexico - ${price_info['mxn']:.0f} MXN",
-            callback_data=f"region_mx_{plan_key}",
-        )],
-        [InlineKeyboardButton(
-            f"Internacional - ${price_info['usd']:.2f} USD",
-            callback_data=f"region_intl_{plan_key}",
-        )],
+        [InlineKeyboardButton(mx_label, callback_data=f"region_mx_{plan_key}")],
+        [InlineKeyboardButton(intl_label, callback_data=f"region_intl_{plan_key}")],
     ]
 
     await query.message.reply_text(
@@ -512,20 +596,24 @@ async def handle_region_mx(update, context):
         await query.message.reply_text("Plan no disponible.")
         return
 
+    promo = context.user_data.get("promo")
+    _, d_mxn, pid = apply_promo_discount(promo, plan_key, price_info["usd"], price_info["mxn"])
+    show_mxn = d_mxn if pid else price_info["mxn"]
+
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     keyboard = [
         [InlineKeyboardButton(
-            f"Mercado Pago - ${price_info['mxn']:.0f} MXN",
+            f"Mercado Pago - ${show_mxn:.0f} MXN",
             callback_data=f"pay_mp_{plan_key}",
         )],
         [InlineKeyboardButton(
-            f"Clip (OXXO/Tarjeta) - ${price_info['mxn']:.0f} MXN",
+            f"Clip (OXXO/Tarjeta) - ${show_mxn:.0f} MXN",
             callback_data=f"pay_clip_{plan_key}",
         )],
     ]
 
     await query.message.reply_text(
-        f"<b>{price_info['label']} - ${price_info['mxn']:.0f} MXN/{price_info['period']}</b>\n\n"
+        f"<b>{price_info['label']} - ${show_mxn:.0f} MXN/{price_info['period']}</b>\n\n"
         "Selecciona tu metodo de pago:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -543,20 +631,24 @@ async def handle_region_intl(update, context):
         await query.message.reply_text("Plan no disponible.")
         return
 
+    promo = context.user_data.get("promo")
+    d_usd, _, pid = apply_promo_discount(promo, plan_key, price_info["usd"], price_info["mxn"])
+    show_usd = d_usd if pid else price_info["usd"]
+
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     keyboard = [
         [InlineKeyboardButton(
-            f"Tarjeta (Stripe) - ${price_info['usd']:.2f} USD",
+            f"Tarjeta (Stripe) - ${show_usd:.2f} USD",
             callback_data=f"pay_stripe_{plan_key}",
         )],
         [InlineKeyboardButton(
-            f"PayPal - ${price_info['usd']:.2f} USD",
+            f"PayPal - ${show_usd:.2f} USD",
             callback_data=f"pay_paypal_{plan_key}",
         )],
     ]
 
     await query.message.reply_text(
-        f"<b>{price_info['label']} - ${price_info['usd']:.2f} USD/{price_info['period']}</b>\n\n"
+        f"<b>{price_info['label']} - ${show_usd:.2f} USD/{price_info['period']}</b>\n\n"
         "Selecciona tu metodo de pago:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -605,28 +697,50 @@ async def handle_pay_stripe(update, context):
     plan_base = plan_key.split("_")[0]  # "basic" or "premium"
     bot_username = (await context.bot.get_me()).username
 
+    # Promo discount
+    promo = context.user_data.get("promo")
+    d_usd, _, promo_id = apply_promo_discount(promo, plan_key, price_info["usd"], price_info["mxn"])
+
     try:
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=[{"price": price_id, "quantity": 1}],
-            mode="subscription",
-            success_url=f"https://t.me/{bot_username}?start=payment_success",
-            cancel_url=f"https://t.me/{bot_username}?start=payment_cancel",
-            metadata={"telegram_id": str(user.id), "plan": plan_base, "period": plan_key},
-            client_reference_id=str(user.id),
-        )
+        session_params = {
+            "payment_method_types": ["card"],
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "mode": "subscription",
+            "success_url": f"https://t.me/{bot_username}?start=payment_success",
+            "cancel_url": f"https://t.me/{bot_username}?start=payment_cancel",
+            "metadata": {
+                "telegram_id": str(user.id),
+                "plan": plan_base,
+                "period": plan_key,
+            },
+            "client_reference_id": str(user.id),
+        }
+
+        if promo_id:
+            coupon = stripe.Coupon.create(
+                percent_off=promo["discount_percent"] if promo.get("discount_percent") else None,
+                amount_off=int(promo["discount_amount_usd"] * 100) if promo.get("discount_amount_usd") else None,
+                currency="usd" if promo.get("discount_amount_usd") else None,
+                duration="once",
+                name=f"Promo {promo['code']}",
+            )
+            session_params["discounts"] = [{"coupon": coupon.id}]
+            session_params["metadata"]["promo_id"] = str(promo_id)
+
+        session = stripe.checkout.Session.create(**session_params)
 
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         keyboard = [[InlineKeyboardButton("Pagar con Stripe", url=session.url)]]
 
+        show_usd = d_usd if promo_id else price_info["usd"]
         await query.message.reply_text(
-            f"<b>Stripe - {price_info['label']} (${price_info['usd']:.2f} USD/{price_info['period']})</b>\n\n"
+            f"<b>Stripe - {price_info['label']} (${show_usd:.2f} USD/{price_info['period']})</b>\n\n"
             "Haz clic para completar el pago:\n"
             "(Tarjetas de credito y debito)",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        logger.info(f"Stripe checkout for {user.id} ({plan_key})")
+        logger.info(f"Stripe checkout for {user.id} ({plan_key}){' promo=' + promo['code'] if promo_id else ''}")
 
     except Exception as e:
         logger.error(f"Stripe error: {e}")
@@ -671,17 +785,23 @@ async def handle_pay_mp(update, context):
         context.user_data["awaiting_email"] = True
         return
 
+    # Promo discount
+    promo = context.user_data.get("promo")
+    _, d_mxn, promo_id = apply_promo_discount(promo, plan_key, price_info["usd"], price_info["mxn"])
+    mxn_amount = float(d_mxn) if promo_id else float(price_info["mxn"])
+    ext_ref = f"{user.id}_{plan_base}_{promo_id}" if promo_id else f"{user.id}_{plan_base}"
+
     preapproval_data = {
         "reason": f"MedExpert {price_info['label']}",
         "payer_email": user_email,
         "auto_recurring": {
             "frequency": 12 if is_annual else 1,
             "frequency_type": "months",
-            "transaction_amount": float(price_info["mxn"]),
+            "transaction_amount": mxn_amount,
             "currency_id": "MXN",
         },
         "back_url": f"https://t.me/{bot_username}?start=payment_success",
-        "external_reference": f"{user.id}_{plan_base}",
+        "external_reference": ext_ref,
         "notification_url": "https://api.medexpert.mx/api/mercadopago/webhook",
     }
 
@@ -699,13 +819,13 @@ async def handle_pay_mp(update, context):
         keyboard = [[InlineKeyboardButton("Pagar con Mercado Pago", url=checkout_url)]]
 
         await query.message.reply_text(
-            f"<b>Mercado Pago - {price_info['label']} (${price_info['mxn']} MXN/{price_info['period']})</b>\n\n"
+            f"<b>Mercado Pago - {price_info['label']} (${mxn_amount:.0f} MXN/{price_info['period']})</b>\n\n"
             "Haz clic para suscribirte:\n"
             "(Tarjeta, transferencia, OXXO y mas)",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        logger.info(f"MP preapproval for {user.id} ({plan_key})")
+        logger.info(f"MP preapproval for {user.id} ({plan_key}){' promo=' + promo['code'] if promo_id else ''}")
 
     except Exception as e:
         logger.error(f"MercadoPago error: {e}")
@@ -723,6 +843,18 @@ async def handle_pay_paypal(update, context):
     price_info = PLAN_PRICES.get(plan_key)
     if not price_info:
         await query.message.reply_text("Plan no disponible.")
+        return
+
+    # PayPal uses fixed plan_ids — no price override possible
+    promo = context.user_data.get("promo")
+    _, _, promo_id = apply_promo_discount(promo, plan_key, price_info["usd"], price_info["mxn"])
+    if promo_id:
+        await query.message.reply_text(
+            "Los codigos promocionales no estan disponibles para PayPal.\n\n"
+            "Usa <b>Stripe</b> (tarjeta) para aplicar tu descuento,\n"
+            "o selecciona otra forma de pago.",
+            parse_mode="HTML",
+        )
         return
 
     client_id = os.getenv("PAYPAL_CLIENT_ID")
@@ -840,6 +972,12 @@ async def handle_pay_clip(update, context):
     bot_username = (await context.bot.get_me()).username
     credentials = base64.b64encode(f"{clip_api_key}:{clip_api_secret}".encode()).decode()
 
+    # Promo discount
+    promo = context.user_data.get("promo")
+    _, d_mxn, promo_id = apply_promo_discount(promo, plan_key, price_info["usd"], price_info["mxn"])
+    mxn_amount = float(d_mxn) if promo_id else float(price_info["mxn"])
+    ext_ref = f"{user.id}_{plan_base}_{promo_id}" if promo_id else f"{user.id}_{plan_base}"
+
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -849,7 +987,7 @@ async def handle_pay_clip(update, context):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "amount": float(price_info["mxn"]),
+                    "amount": mxn_amount,
                     "currency": "MXN",
                     "purchase_description": f"MedExpert {price_info['label']}",
                     "redirection_url": {
@@ -858,7 +996,7 @@ async def handle_pay_clip(update, context):
                         "default": f"https://t.me/{bot_username}",
                     },
                     "metadata": {
-                        "external_reference": f"{user.id}_{plan_base}",
+                        "external_reference": ext_ref,
                     },
                     "custom_payment_options": {
                         "payment_method_types": ["debit", "credit", "cash"],
@@ -880,13 +1018,13 @@ async def handle_pay_clip(update, context):
         keyboard = [[InlineKeyboardButton("Pagar con Clip", url=checkout_url)]]
 
         await query.message.reply_text(
-            f"<b>Clip - {price_info['label']} (${price_info['mxn']:.0f} MXN/{price_info['period']})</b>\n\n"
+            f"<b>Clip - {price_info['label']} (${mxn_amount:.0f} MXN/{price_info['period']})</b>\n\n"
             "Haz clic para completar el pago:\n"
             "(Tarjeta, OXXO)",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
-        logger.info(f"Clip checkout for {user.id} ({plan_key}): {data.get('payment_request_id')}")
+        logger.info(f"Clip checkout for {user.id} ({plan_key}): {data.get('payment_request_id')}{' promo=' + promo['code'] if promo_id else ''}")
 
     except Exception as e:
         logger.error(f"Clip error: {e}")
@@ -1057,7 +1195,7 @@ async def handle_voice(update, context):
         )
 
         # Query RAG + LLM (with user source filter)
-        brain = get_brain()
+        brain = get_brain(specialty)
         source_filter = _build_source_filter(user.id)
         result = brain.query(transcript, expert_slug=specialty, source_filter=source_filter)
 
@@ -1138,6 +1276,12 @@ async def handle_text(update, context):
     if not text:
         return
 
+    # Intercept pending deepen follow-up question
+    if context.user_data.get("pending_deepen"):
+        consultation_id = context.user_data.pop("pending_deepen")
+        await _handle_deepen_with_question(update, context, consultation_id, text)
+        return
+
     # Intercept email capture
     if context.user_data.get("awaiting_email"):
         email = text.strip().lower()
@@ -1197,7 +1341,7 @@ async def handle_text(update, context):
         logger.info(f"Text from {user.id}: '{text[:80]}...'")
 
         # Query RAG + LLM (with user source filter)
-        brain = get_brain()
+        brain = get_brain(specialty)
         source_filter = _build_source_filter(user.id)
         result = brain.query(text, expert_slug=specialty, source_filter=source_filter)
 
@@ -1312,11 +1456,9 @@ async def _send_long_message(update, text: str, max_len: int = 4000):
 
 
 async def handle_deepen_callback(update, context):
-    """Handle 'Profundizar' button — tiered deepening.
+    """Handle 'Profundizar' button — show choice: general deepen or ask a question."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-    Free + basic plan: GPT-OSS 120B via Groq (~3s)
-    Premium plan: Claude Opus 4.6 (~30s), max 1/day
-    """
     query = update.callback_query
     await query.answer()
 
@@ -1336,67 +1478,158 @@ async def handle_deepen_callback(update, context):
         await query.edit_message_text("No tienes acceso a esta consulta.")
         return
 
-    specialty = consultation.get("specialty", "oncologia")
-
-    # Check if already deepened
     if consultation.get("is_deepening"):
         await query.message.reply_text("Esta consulta ya fue profundizada.")
         return
 
-    # Determine user tier and deepening model
-    bot_user = db.get_bot_user(user_id)
+    keyboard = [
+        [
+            InlineKeyboardButton("Profundizar en general", callback_data=f"deepen_go_{consultation_id}"),
+            InlineKeyboardButton("Tengo una pregunta", callback_data=f"deepen_ask_{consultation_id}"),
+        ],
+    ]
+    await query.message.reply_text(
+        "¿Quieres profundizar en algo especifico?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_deepen_ask(update, context):
+    """Handle 'Tengo una pregunta' — store pending state, ask user to type question."""
+    query = update.callback_query
+    await query.answer()
+
+    consultation_id = int(query.data.split("_")[2])
+    consultation = db.get_bot_consultation_by_id(consultation_id)
+    if not consultation:
+        await query.message.reply_text("Consulta no encontrada.")
+        return
+
+    context.user_data["pending_deepen"] = consultation_id
+    await query.message.reply_text(
+        "Escribe tu pregunta de seguimiento:\n"
+        "(Ej: ¿Qué efectos adversos tiene el pembrolizumab?)\n\n"
+        "Usa /cancelar para cancelar."
+    )
+
+
+async def _handle_deepen_with_question(update, context, consultation_id: int, followup_question: str):
+    """Execute deepen with a specific follow-up question."""
+    await _execute_deepen(update, context, consultation_id, followup_question=followup_question)
+
+
+async def handle_deepen_go(update, context):
+    """Handle 'Profundizar en general' — immediate deepen."""
+    query = update.callback_query
+    await query.answer()
+
+    consultation_id = int(query.data.split("_")[2])
+    await _execute_deepen(query, context, consultation_id, is_callback=True)
+
+
+async def _execute_deepen(update_or_query, context, consultation_id: int,
+                          followup_question: str = None, is_callback: bool = False):
+    """Core deepen logic shared by general deepen and follow-up question deepen.
+
+    Free + basic plan: GPT-OSS 120B via Groq (~3s)
+    Premium plan: configured deepen model (~5-30s)
+    """
+    consultation = db.get_bot_consultation_by_id(consultation_id)
+    if not consultation:
+        msg = "Consulta no encontrada."
+        if is_callback:
+            await update_or_query.message.reply_text(msg)
+        else:
+            await update_or_query.message.reply_text(msg)
+        return
+
+    if is_callback:
+        user_id = update_or_query.from_user.id
+    else:
+        user_id = update_or_query.effective_user.id
+
+    if consultation["telegram_id"] != user_id:
+        msg = "No tienes acceso a esta consulta."
+        if is_callback:
+            await update_or_query.message.reply_text(msg)
+        else:
+            await update_or_query.message.reply_text(msg)
+        return
+
+    specialty = consultation.get("specialty", "oncologia")
+
+    if consultation.get("is_deepening"):
+        msg = "Esta consulta ya fue profundizada."
+        if is_callback:
+            await update_or_query.message.reply_text(msg)
+        else:
+            await update_or_query.message.reply_text(msg)
+        return
+
+    # Determine user tier
     user_plan = db.get_bot_user_plan(user_id)
 
     if user_plan == "premium":
-        # Premium (Plus): Opus, max 3/day
         opus_today = db.count_bot_opus_deepenings_today(user_id, specialty)
         if opus_today >= 3:
-            await query.message.reply_text(
-                "Ya usaste tus 3 profundizaciones premium (Opus) de hoy.\n"
-                "Se renuevan manana. Puedes seguir consultando normalmente."
-            )
+            msg = ("Ya usaste tus 3 profundizaciones premium de hoy.\n"
+                   "Se renuevan manana. Puedes seguir consultando normalmente.")
+            if is_callback:
+                await update_or_query.message.reply_text(msg)
+            else:
+                await update_or_query.message.reply_text(msg)
             return
         tier = "premium"
     elif user_plan == "basic":
-        # Basic: Sonnet, max 5/day
         sonnet_today = db.count_bot_sonnet_deepenings_today(user_id, specialty)
         if sonnet_today >= 5:
-            await query.message.reply_text(
-                "Ya usaste tus 5 profundizaciones de hoy.\n"
-                "Se renuevan manana.\n\n"
-                "Plan Plus ($24.99 USD/mes): profundizar con Claude Opus\n"
-                "/suscribir para cambiar de plan"
-            )
+            msg = ("Ya usaste tus 5 profundizaciones de hoy.\n"
+                   "Se renuevan manana.\n\n"
+                   "Plan Plus ($24.99 USD/mes): profundizar con modelo avanzado\n"
+                   "/suscribir para cambiar de plan")
+            if is_callback:
+                await update_or_query.message.reply_text(msg)
+            else:
+                await update_or_query.message.reply_text(msg)
             return
         tier = "basic"
     else:
-        # Free: GPT-OSS 120B
         tier = "free"
 
-    # Free tier: deepening counts as a query
     free_used = db.count_bot_free_queries(user_id, specialty)
     is_free = user_plan == "free"
 
     if is_free:
         if not db.can_bot_user_query(user_id, specialty, FREE_QUERY_LIMIT):
-            await query.message.reply_text(
-                "No tienes consultas gratis restantes.\n"
-                "Profundizar consume 1 consulta.\n\n"
-                "Plan Basico ($14.99 USD/mes): consultas ilimitadas + profundizar con Claude Sonnet\n"
-                "Plan Premium ($24.99 USD/mes): todo + profundizar con Claude Opus\n\n"
-                "/suscribir para activar"
-            )
+            msg = ("No tienes consultas gratis restantes.\n"
+                   "Profundizar consume 1 consulta.\n\n"
+                   "/suscribir para activar")
+            if is_callback:
+                await update_or_query.message.reply_text(msg)
+            else:
+                await update_or_query.message.reply_text(msg)
             return
 
+    # Build model label from config
+    config = db.get_expert_llm_config(specialty)
+    if tier in ("premium", "basic"):
+        model_label = config["deepen_model"]
+    else:
+        model_label = config["base_model"]
+
     # Show processing message
-    model_labels = {"premium": "Claude Opus 4.6", "basic": "Claude Sonnet", "free": "GPT-OSS 120B"}
-    model_label = model_labels.get(tier, "GPT-OSS 120B")
-    processing_msg = await query.message.reply_text(
-        f"Profundizando con {model_label}..."
-    )
+    extra = " con tu pregunta" if followup_question else ""
+    if is_callback:
+        processing_msg = await update_or_query.message.reply_text(
+            f"Profundizando{extra} con {model_label}..."
+        )
+    else:
+        processing_msg = await update_or_query.message.reply_text(
+            f"Profundizando{extra} con {model_label}..."
+        )
 
     try:
-        brain = get_brain()
+        brain = get_brain(specialty)
         source_filter = _build_source_filter(user_id)
         result = brain.deepen(
             original_query=consultation["query_text"],
@@ -1404,6 +1637,7 @@ async def handle_deepen_callback(update, context):
             expert_slug=specialty,
             tier=tier,
             source_filter=source_filter,
+            followup_question=followup_question,
         )
 
         # Extract clinical metadata from deepened response
@@ -1412,12 +1646,12 @@ async def handle_deepen_callback(update, context):
         )
         metadata_json = _json.dumps(metadata, ensure_ascii=False)
 
-        # Log as consultation (counts against free tier)
+        # Log as consultation
         deepen_id = db.log_bot_consultation(
             telegram_id=user_id,
             specialty=specialty,
             query_type=consultation.get("query_type", "text"),
-            query_text=consultation["query_text"],
+            query_text=followup_question or consultation["query_text"],
             response_text=result.get("response", ""),
             response_time_seconds=result.get("processing_time", 0),
             llm_provider=result.get("provider", ""),
@@ -1438,30 +1672,31 @@ async def handle_deepen_callback(update, context):
         await processing_msg.delete()
 
         # Send deepened response
-        await _send_long_message_from_callback(query, main_text)
+        if is_callback:
+            await _send_long_message_from_callback(update_or_query, main_text)
+        else:
+            await _send_long_message(update_or_query, main_text)
 
-        # Send footer with PDF + feedback buttons (no deepen button on deepened response)
+        # Send footer with PDF + feedback buttons
         if footer:
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             keyboard = [
                 [InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{deepen_id}")],
                 [InlineKeyboardButton("¿Te sirvió?", callback_data=f"eval_{deepen_id}")],
             ]
-            await query.message.reply_text(
-                footer, parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-            )
+            if is_callback:
+                await update_or_query.message.reply_text(
+                    footer, parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+            else:
+                await update_or_query.message.reply_text(
+                    footer, parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
 
-        # Update original message to show it was deepened
-        try:
-            await query.edit_message_text(
-                query.message.text_html or query.message.text or "Profundizado",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
-
-        logger.info(f"Deepen for {user_id} (tier={tier}, model={model_label})")
+        logger.info(f"Deepen for {user_id} (tier={tier}, model={model_label})"
+                     f"{' followup' if followup_question else ''}")
 
     except Exception as e:
         logger.error(f"Deepen error: {e}", exc_info=True)
@@ -1661,6 +1896,7 @@ def main():
     app.add_handler(CommandHandler("soporte", cmd_soporte))
     app.add_handler(CommandHandler("cancelar", cmd_cancelar))
     app.add_handler(CommandHandler("suscribir", cmd_suscribir))
+    app.add_handler(CommandHandler("codigo", cmd_codigo))
     app.add_handler(CommandHandler("verificar", cmd_verificar))
     app.add_handler(CommandHandler("congresos", cmd_congresos))
     app.add_handler(CommandHandler("fuentes", cmd_fuentes))
@@ -1681,6 +1917,8 @@ def main():
     # Callback handlers (PDF export button)
     from telegram.ext import CallbackQueryHandler
     app.add_handler(CallbackQueryHandler(handle_deepen_callback, pattern=r"^deepen_\d+$"))
+    app.add_handler(CallbackQueryHandler(handle_deepen_go, pattern=r"^deepen_go_\d+$"))
+    app.add_handler(CallbackQueryHandler(handle_deepen_ask, pattern=r"^deepen_ask_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_pdf_callback, pattern=r"^pdf_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_feedback_prompt, pattern=r"^eval_\d+$"))
     app.add_handler(CallbackQueryHandler(handle_feedback_response, pattern=r"^fb_[a-e]_\d+$"))
@@ -1705,6 +1943,7 @@ def main():
             BotCommand("ayuda", "Ver comandos disponibles"),
             BotCommand("estado", "Ver tu plan y consultas"),
             BotCommand("suscribir", "Ver planes de suscripcion"),
+            BotCommand("codigo", "Aplicar codigo promocional"),
             BotCommand("verificar", "Verificar cedula profesional"),
             BotCommand("congresos", "Proximos congresos medicos"),
             BotCommand("fuentes", "Elegir fuentes de guias clinicas"),

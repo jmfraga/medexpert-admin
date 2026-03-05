@@ -26,6 +26,12 @@
         .expert-info-meta { font-size: 0.78em; color: #64748b; display: flex; gap: 12px; }
 
         .expert-actions { display: flex; gap: 6px; }
+
+        .llm-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid #1e2640; }
+        .llm-section h4 { font-size: 0.85em; color: #94a3b8; margin-bottom: 8px; }
+        .llm-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+        .llm-row label { font-size: 0.8em; color: #64748b; }
+        .llm-row select { width: 100%; }
 {% endblock %}
 
 {% block content %}
@@ -78,6 +84,44 @@
                 <label>System prompt</label>
                 <textarea id="expertPrompt" rows="6" placeholder="Instrucciones para el LLM..."></textarea>
             </div>
+            <div class="llm-section">
+                <h4>Modelo base (consultas)</h4>
+                <div class="llm-row">
+                    <div class="form-group">
+                        <label>Proveedor</label>
+                        <select id="baseProvider" onchange="updateModelOptions('baseProvider', 'baseModel')">
+                            <option value="">-- Default global --</option>
+                            {% for provider in available_models %}
+                            <option value="{{ provider }}">{{ provider }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Modelo</label>
+                        <select id="baseModel">
+                            <option value="">-- Default global --</option>
+                        </select>
+                    </div>
+                </div>
+                <h4>Modelo profundizar</h4>
+                <div class="llm-row">
+                    <div class="form-group">
+                        <label>Proveedor</label>
+                        <select id="deepenProvider" onchange="updateModelOptions('deepenProvider', 'deepenModel')">
+                            <option value="">-- Default global --</option>
+                            {% for provider in available_models %}
+                            <option value="{{ provider }}">{{ provider }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Modelo</label>
+                        <select id="deepenModel">
+                            <option value="">-- Default global --</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
             <div class="modal-actions">
                 <button class="btn" onclick="closeModal()">Cancelar</button>
                 <button class="btn primary" onclick="saveExpert()">Guardar</button>
@@ -88,21 +132,67 @@
 
 {% block scripts %}
     <script>
+        const AVAILABLE_MODELS = {{ available_models | tojson }};
+
+        function updateModelOptions(providerSelectId, modelSelectId) {
+            const provider = document.getElementById(providerSelectId).value;
+            const modelSelect = document.getElementById(modelSelectId);
+            const currentVal = modelSelect.value;
+            modelSelect.innerHTML = '<option value="">-- Default global --</option>';
+            if (provider && AVAILABLE_MODELS[provider]) {
+                for (const m of AVAILABLE_MODELS[provider]) {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.name;
+                    modelSelect.appendChild(opt);
+                }
+            }
+            // Restore selection if still valid
+            if (currentVal) {
+                modelSelect.value = currentVal;
+                if (!modelSelect.value) modelSelect.value = '';
+            }
+        }
+
+        function setProviderAndModel(providerSelectId, modelSelectId, providerVal, modelVal) {
+            const providerSelect = document.getElementById(providerSelectId);
+            providerSelect.value = providerVal || '';
+            updateModelOptions(providerSelectId, modelSelectId);
+            document.getElementById(modelSelectId).value = modelVal || '';
+        }
+
         function openCreateModal() {
             document.getElementById('modalTitle').textContent = 'Nuevo experto';
             document.getElementById('editId').value = '';
             document.getElementById('expertName').value = '';
             document.getElementById('expertIcon').value = '&#9678;';
             document.getElementById('expertPrompt').value = '';
+            setProviderAndModel('baseProvider', 'baseModel', '', '');
+            setProviderAndModel('deepenProvider', 'deepenModel', '', '');
             document.getElementById('expertModal').classList.add('show');
             document.getElementById('expertName').focus();
         }
 
-        function editExpert(id, name, prompt) {
+        async function editExpert(id, name, prompt) {
             document.getElementById('modalTitle').textContent = 'Editar experto';
             document.getElementById('editId').value = id;
             document.getElementById('expertName').value = name;
             document.getElementById('expertPrompt').value = prompt;
+            // Fetch current LLM config
+            try {
+                const resp = await fetch(`/api/experts/${id}`);
+                if (resp.ok) {
+                    const expert = await resp.json();
+                    setProviderAndModel('baseProvider', 'baseModel', expert.base_provider || '', expert.base_model || '');
+                    setProviderAndModel('deepenProvider', 'deepenModel', expert.deepen_provider || '', expert.deepen_model || '');
+                } else {
+                    setProviderAndModel('baseProvider', 'baseModel', '', '');
+                    setProviderAndModel('deepenProvider', 'deepenModel', '', '');
+                }
+            } catch {
+                setProviderAndModel('baseProvider', 'baseModel', '', '');
+                setProviderAndModel('deepenProvider', 'deepenModel', '', '');
+            }
             document.getElementById('expertModal').classList.add('show');
         }
 
@@ -118,7 +208,13 @@
 
             if (!name) { showToast('Nombre requerido', 'error'); return; }
 
-            const body = { name, icon, system_prompt };
+            const body = {
+                name, icon, system_prompt,
+                base_provider: document.getElementById('baseProvider').value,
+                base_model: document.getElementById('baseModel').value,
+                deepen_provider: document.getElementById('deepenProvider').value,
+                deepen_model: document.getElementById('deepenModel').value,
+            };
 
             if (id) {
                 const data = await apiCall(`/api/experts/${id}`, 'PUT', body);
