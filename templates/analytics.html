@@ -239,6 +239,50 @@
     </div>
 </div>
 
+<!-- Clinical Metadata -->
+<div class="section-title">Metadatos clinicos</div>
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-value" id="kpiMetaCoverage">-</div>
+        <div class="kpi-label">Cobertura metadata</div>
+        <div class="kpi-sub">consultas con diagnostico</div>
+    </div>
+</div>
+<div class="charts-grid">
+    <div class="chart-card">
+        <h3>Top 10 Diagnosticos</h3>
+        <canvas id="chartMetaDiagnoses"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Distribucion por estadio</h3>
+        <canvas id="chartMetaStages"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Intencion del tratamiento</h3>
+        <canvas id="chartMetaIntent"></canvas>
+    </div>
+    <div class="chart-card">
+        <h3>Categoria de neoplasia</h3>
+        <canvas id="chartMetaCategory"></canvas>
+    </div>
+</div>
+<div class="tables-grid">
+    <div class="data-table">
+        <h3>Farmacos mas mencionados</h3>
+        <table>
+            <thead><tr><th>Farmaco</th><th>Menciones</th><th></th></tr></thead>
+            <tbody id="tableMetaTreatments"></tbody>
+        </table>
+    </div>
+    <div class="data-table">
+        <h3>Diagnostico vs Profundizacion</h3>
+        <table>
+            <thead><tr><th>Diagnostico</th><th>Total</th><th>Profundizadas</th><th>Tasa %</th></tr></thead>
+            <tbody id="tableMetaDiagDeepen"></tbody>
+        </table>
+    </div>
+</div>
+
 <!-- Diagnosis-Deepening Correlation -->
 <div class="section-title">Diagnostico y profundizacion</div>
 <div class="tables-grid">
@@ -541,6 +585,87 @@ function loadData(range) {
             .map(([key, count]) =>
                 `<tr><td>${feedbackLabels[key] || key}</td><td>${count}</td><td>${renderBarPercent(count, fbMax)}</td></tr>`
             ).join('');
+
+        // ── Clinical Metadata Section ──
+        const meta = d.metadata || {};
+
+        // KPI: Coverage
+        document.getElementById('kpiMetaCoverage').textContent = (meta.coverage_pct || 0) + '%';
+
+        // Chart: Top diagnoses (horizontal bar, with CIE-10 code)
+        const diagData = (meta.top_diagnoses || []).slice(0, 10);
+        createChart('chartMetaDiagnoses', 'bar', {
+            labels: diagData.map(r => r.cie10 ? `[${r.cie10}] ${r.diagnosis}` : r.diagnosis),
+            datasets: [{
+                data: diagData.map(r => r.count),
+                backgroundColor: AMBER, borderRadius: 4,
+            }],
+        }, { indexAxis: 'y', scales: { x: { beginAtZero: true } } });
+
+        // Chart: Stage distribution (doughnut)
+        const stageColors = {'I': '#22c55e', 'II': '#84cc16', 'III': '#f59e0b', 'IV': '#ef4444'};
+        const stageData = (meta.stage_distribution || []);
+        createChart('chartMetaStages', 'doughnut', {
+            labels: stageData.map(r => r.stage),
+            datasets: [{
+                data: stageData.map(r => r.count),
+                backgroundColor: stageData.map(r => {
+                    const base = (r.stage || '').replace(/[ABC]$/, '');
+                    return stageColors[base] || GRAY;
+                }),
+                borderWidth: 0,
+            }],
+        }, {
+            scales: {},
+            plugins: { legend: { display: true, position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 } } } },
+        });
+
+        // Chart: Intent distribution (doughnut)
+        const intentColors = [GREEN, AMBER, BLUE, '#8b5cf6', RED, GRAY];
+        const intentData = (meta.intent_distribution || []);
+        createChart('chartMetaIntent', 'doughnut', {
+            labels: intentData.map(r => r.intent),
+            datasets: [{
+                data: intentData.map(r => r.count),
+                backgroundColor: intentData.map((_, i) => intentColors[i % intentColors.length]),
+                borderWidth: 0,
+            }],
+        }, {
+            scales: {},
+            plugins: { legend: { display: true, position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 } } } },
+        });
+
+        // Chart: Category distribution (doughnut)
+        const catData = (meta.category_distribution || []);
+        const catColors = {'neoplasia_solida': AMBER, 'neoplasia_hematologica': BLUE};
+        const catLabels = {'neoplasia_solida': 'Solida', 'neoplasia_hematologica': 'Hematologica'};
+        createChart('chartMetaCategory', 'doughnut', {
+            labels: catData.map(r => catLabels[r.category] || r.category),
+            datasets: [{
+                data: catData.map(r => r.count),
+                backgroundColor: catData.map(r => catColors[r.category] || GRAY),
+                borderWidth: 0,
+            }],
+        }, {
+            scales: {},
+            plugins: { legend: { display: true, position: 'bottom', labels: { color: '#94a3b8', font: { size: 10 } } } },
+        });
+
+        // Table: Top treatments
+        const txData = (meta.top_treatments || []);
+        const txMax = txData.length > 0 ? Math.max(...txData.map(r => r.count), 1) : 1;
+        document.getElementById('tableMetaTreatments').innerHTML = txData
+            .map(r => `<tr><td>${r.treatment}</td><td>${r.count}</td><td>${renderBarPercent(r.count, txMax)}</td></tr>`)
+            .join('') || '<tr><td colspan="3" style="color:#475569">Sin datos</td></tr>';
+
+        // Table: Diagnosis vs Deepening (with CIE-10)
+        const ddData = (meta.diagnosis_deepening || []);
+        document.getElementById('tableMetaDiagDeepen').innerHTML = ddData
+            .map(r => {
+                const label = r.cie10 ? `<span style="color:#64748b">[${r.cie10}]</span> ${r.diagnosis}` : r.diagnosis;
+                return `<tr><td>${label}</td><td>${r.total}</td><td>${r.deepened}</td><td>${r.deepening_rate}%</td></tr>`;
+            })
+            .join('') || '<tr><td colspan="4" style="color:#475569">Sin datos</td></tr>';
 
         document.getElementById('loadingOverlay').classList.add('hidden');
     }).catch(err => {

@@ -21,9 +21,11 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+import json as _json
 import database as db
 from bot_brain import BotBrain, transcribe_audio, format_response_for_telegram, generate_consultation_pdf
 from anonymizer import anonymize_text
+from clinical_metadata import extract as extract_clinical_metadata
 
 # Logging
 logging.basicConfig(
@@ -946,6 +948,10 @@ async def handle_voice(update, context):
         brain = get_brain()
         result = brain.query(transcript, expert_slug=specialty)
 
+        # Extract clinical metadata
+        metadata = extract_clinical_metadata(transcript, result.get("response", ""), specialty)
+        metadata_json = _json.dumps(metadata, ensure_ascii=False)
+
         # Log consultation
         user_plan = db.get_bot_user_plan(user.id)
         free_used = db.count_bot_free_queries(user.id, specialty)
@@ -964,6 +970,7 @@ async def handle_voice(update, context):
             rag_chunks_used=result.get("rag_chunks_used", 0),
             is_free_tier=is_free,
             citations=result.get("citations", []),
+            clinical_metadata_json=metadata_json,
         )
 
         # Format and send response
@@ -1080,6 +1087,10 @@ async def handle_text(update, context):
         brain = get_brain()
         result = brain.query(text, expert_slug=specialty)
 
+        # Extract clinical metadata
+        metadata = extract_clinical_metadata(text, result.get("response", ""), specialty)
+        metadata_json = _json.dumps(metadata, ensure_ascii=False)
+
         # Log consultation
         user_plan = db.get_bot_user_plan(user.id)
         free_used = db.count_bot_free_queries(user.id, specialty)
@@ -1098,6 +1109,7 @@ async def handle_text(update, context):
             rag_chunks_used=result.get("rag_chunks_used", 0),
             is_free_tier=is_free,
             citations=result.get("citations", []),
+            clinical_metadata_json=metadata_json,
         )
 
         # Format and send response
@@ -1278,6 +1290,12 @@ async def handle_deepen_callback(update, context):
             tier=tier,
         )
 
+        # Extract clinical metadata from deepened response
+        metadata = extract_clinical_metadata(
+            consultation["query_text"], result.get("response", ""), specialty
+        )
+        metadata_json = _json.dumps(metadata, ensure_ascii=False)
+
         # Log as consultation (counts against free tier)
         deepen_id = db.log_bot_consultation(
             telegram_id=user_id,
@@ -1295,6 +1313,7 @@ async def handle_deepen_callback(update, context):
             citations=result.get("citations", []),
             is_deepening=True,
             parent_consultation_id=consultation_id,
+            clinical_metadata_json=metadata_json,
         )
 
         # Format and send

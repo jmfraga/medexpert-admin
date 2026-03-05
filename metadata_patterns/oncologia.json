@@ -1,0 +1,328 @@
+{
+  "specialty": "oncologia",
+  "cie10_chapter": "C00-D49",
+  "severity": {
+    "type": "oncology_stage",
+    "label": "Estadio"
+  },
+  "treatment_line": true,
+  "diagnoses": [
+    {
+      "name": "cancer de mama",
+      "cie10": "C50",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+mama",
+        "ca\\.\\s*mama",
+        "carcinoma\\s+(?:de\\s+)?mama",
+        "cancer\\s+mamario",
+        "triple\\s+negativ[eo]\\s+(?:de\\s+)?mama",
+        "tumor\\s+(?:de\\s+)?mama"
+      ]
+    },
+    {
+      "name": "cancer de pulmon",
+      "cie10": "C34",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+pulmon",
+        "ca\\.\\s*pulmon",
+        "carcinoma\\s+(?:de\\s+)?pulmon",
+        "cancer\\s+pulmonar",
+        "cpnm",
+        "nsclc",
+        "sclc",
+        "cancer\\s+de\\s+pulmon\\s+de\\s+celulas\\s+(?:no\\s+)?pequenas"
+      ]
+    },
+    {
+      "name": "cancer colorrectal",
+      "cie10": "C18",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+(?:de\\s+)?colon",
+        "ca\\.\\s*colon",
+        "cancer\\s+colorrectal",
+        "carcinoma\\s+colorrectal",
+        "ccr"
+      ]
+    },
+    {
+      "name": "cancer de prostata",
+      "cie10": "C61",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+prostata",
+        "ca\\.\\s*prostata",
+        "carcinoma\\s+(?:de\\s+)?prostata",
+        "adenocarcinoma\\s+(?:de\\s+)?prostata"
+      ]
+    },
+    {
+      "name": "cancer gastrico",
+      "cie10": "C16",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+gastrico",
+        "ca\\.\\s*gastrico",
+        "cancer\\s+de\\s+estomago",
+        "carcinoma\\s+gastrico",
+        "adenocarcinoma\\s+gastrico"
+      ]
+    },
+    {
+      "name": "cancer de pancreas",
+      "cie10": "C25",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+pancreas",
+        "ca\\.\\s*pancreas",
+        "carcinoma\\s+(?:de\\s+)?pancreas",
+        "adenocarcinoma\\s+(?:de\\s+)?pancreas",
+        "cancer\\s+pancreatico"
+      ]
+    },
+    {
+      "name": "cancer hepatico",
+      "cie10": "C22",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+hepatico",
+        "hepatocarcinoma",
+        "carcinoma\\s+hepatocelular",
+        "cancer\\s+de\\s+higado",
+        "hcc"
+      ]
+    },
+    {
+      "name": "cancer renal",
+      "cie10": "C64",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+rinon",
+        "ca\\.\\s*renal",
+        "carcinoma\\s+(?:de\\s+celulas\\s+)?renales?",
+        "cancer\\s+renal"
+      ]
+    },
+    {
+      "name": "cancer de vejiga",
+      "cie10": "C67",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+vejiga",
+        "ca\\.\\s*vesical",
+        "carcinoma\\s+(?:de\\s+)?vejiga",
+        "cancer\\s+vesical",
+        "carcinoma\\s+urotelial"
+      ]
+    },
+    {
+      "name": "cancer de ovario",
+      "cie10": "C56",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+ovario",
+        "ca\\.\\s*ovario",
+        "carcinoma\\s+(?:de\\s+)?ovario",
+        "cancer\\s+ovarico"
+      ]
+    },
+    {
+      "name": "cancer cervicouterino",
+      "cie10": "C53",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+(?:de\\s+)?cervix",
+        "cancer\\s+cervicouterino",
+        "ca\\.\\s*cu",
+        "cancer\\s+cervical",
+        "carcinoma\\s+cervicouterino",
+        "cacu"
+      ]
+    },
+    {
+      "name": "cancer de endometrio",
+      "cie10": "C54",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+endometrio",
+        "carcinoma\\s+(?:de\\s+)?endometrio",
+        "cancer\\s+endometrial"
+      ]
+    },
+    {
+      "name": "cancer de cabeza y cuello",
+      "cie10": "C10-C14",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+cabeza\\s+y\\s+cuello",
+        "carcinoma\\s+de\\s+cabeza\\s+y\\s+cuello",
+        "cancer\\s+(?:de\\s+)?orofaringe",
+        "cancer\\s+(?:de\\s+)?laringe",
+        "cancer\\s+(?:de\\s+)?hipofaringe"
+      ]
+    },
+    {
+      "name": "cancer de esofago",
+      "cie10": "C15",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+esofago",
+        "carcinoma\\s+(?:de\\s+)?esofago",
+        "cancer\\s+esofagico"
+      ]
+    },
+    {
+      "name": "cancer de tiroides",
+      "cie10": "C73",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+tiroides",
+        "carcinoma\\s+(?:de\\s+)?tiroides",
+        "cancer\\s+tiroideo"
+      ]
+    },
+    {
+      "name": "melanoma",
+      "cie10": "C43",
+      "category": "neoplasia_solida",
+      "patterns": ["melanoma"]
+    },
+    {
+      "name": "sarcoma",
+      "cie10": "C49",
+      "category": "neoplasia_solida",
+      "patterns": ["sarcoma"]
+    },
+    {
+      "name": "tumor cerebral",
+      "cie10": "C71",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "glioblastoma",
+        "glioma",
+        "tumor\\s+cerebral",
+        "cancer\\s+de\\s+cerebro",
+        "astrocitoma"
+      ]
+    },
+    {
+      "name": "mesotelioma",
+      "cie10": "C45",
+      "category": "neoplasia_solida",
+      "patterns": ["mesotelioma"]
+    },
+    {
+      "name": "cancer de testiculo",
+      "cie10": "C62",
+      "category": "neoplasia_solida",
+      "patterns": [
+        "cancer\\s+de\\s+testiculo",
+        "ca\\.\\s*testicular",
+        "tumor\\s+(?:de\\s+celulas\\s+)?germinales?",
+        "cancer\\s+testicular"
+      ]
+    },
+    {
+      "name": "linfoma de hodgkin",
+      "cie10": "C81",
+      "category": "neoplasia_hematologica",
+      "patterns": [
+        "linfoma\\s+(?:de\\s+)?hodgkin(?!\\s*no)",
+        "enfermedad\\s+de\\s+hodgkin"
+      ]
+    },
+    {
+      "name": "linfoma no hodgkin",
+      "cie10": "C82",
+      "category": "neoplasia_hematologica",
+      "patterns": [
+        "linfoma\\s+no\\s+hodgkin",
+        "lnh",
+        "linfoma\\s+difuso",
+        "linfoma\\s+folicular",
+        "linfoma\\s+de\\s+celulas\\s+(?:b|t)",
+        "linfoma\\s+del?\\s+manto"
+      ]
+    },
+    {
+      "name": "leucemia linfoblastica aguda",
+      "cie10": "C91.0",
+      "category": "neoplasia_hematologica",
+      "patterns": [
+        "leucemia\\s+(?:linfocitica|linfoblastica)\\s+aguda",
+        "lla"
+      ]
+    },
+    {
+      "name": "leucemia mieloide aguda",
+      "cie10": "C92.0",
+      "category": "neoplasia_hematologica",
+      "patterns": [
+        "leucemia\\s+(?:mieloide|mielocitica)\\s+aguda",
+        "lma"
+      ]
+    },
+    {
+      "name": "leucemia linfocitica cronica",
+      "cie10": "C91.1",
+      "category": "neoplasia_hematologica",
+      "patterns": [
+        "leucemia\\s+(?:linfocitica|linfoblastica)\\s+cronica",
+        "llc"
+      ]
+    },
+    {
+      "name": "leucemia mieloide cronica",
+      "cie10": "C92.1",
+      "category": "neoplasia_hematologica",
+      "patterns": [
+        "leucemia\\s+(?:mieloide|mielocitica)\\s+cronica",
+        "lmc"
+      ]
+    },
+    {
+      "name": "mieloma multiple",
+      "cie10": "C90",
+      "category": "neoplasia_hematologica",
+      "patterns": [
+        "mieloma\\s+multiple",
+        "mieloma"
+      ]
+    }
+  ],
+  "subtypes": [
+    {"name": "triple negativo", "pattern": "triple\\s+negativ[eo]"},
+    {"name": "HER2+", "pattern": "her2\\s*(?:\\+|positiv)"},
+    {"name": "HER2-", "pattern": "her2\\s*(?:\\-|negativ)"},
+    {"name": "EGFR+", "pattern": "egfr\\s*[\\+positivo mutado]{0,8}"},
+    {"name": "ALK+", "pattern": "alk\\s*[\\+positivo]{0,8}"},
+    {"name": "BRCA+", "pattern": "brca\\d?\\s*[\\+positivo mutado]{0,8}"},
+    {"name": "PD-L1+", "pattern": "pd-?l1\\s*[\\+positivo alto]{0,8}"},
+    {"name": "MSI-H", "pattern": "msi-?h|inestabilidad\\s+microsatelital\\s+alta"},
+    {"name": "KRAS mutado", "pattern": "kras\\s*(?:g12c|mutado|[\\+])"},
+    {"name": "ROS1+", "pattern": "ros1\\s*[\\+positivo]{0,8}"},
+    {"name": "RE+/RP+", "pattern": "re\\s*[\\+positivo]{1,8}.*\\brp\\s*[\\+positivo]{1,8}"}
+  ],
+  "intents": [
+    {"name": "curativo", "pattern": "curativ[oa]|intencion\\s+curativa|con\\s+intencion\\s+de\\s+cura"},
+    {"name": "paliativo", "pattern": "paliativ[oa]s?|cuidados?\\s+paliativ|intencion\\s+paliativa|tratamiento\\s+de\\s+soporte"},
+    {"name": "neoadyuvante", "pattern": "neoadyuvan(?:te|cia)|pre-?quirurgic[oa]"},
+    {"name": "adyuvante", "pattern": "adyuvan(?:te|cia)|post-?quirurgic[oa]"},
+    {"name": "diagnostico", "pattern": "diagnostic[oa]|diagnostico|deteccion|tamizaje|screening"},
+    {"name": "seguimiento", "pattern": "seguimiento|vigilancia|monitore[oa]|supervivencia"}
+  ],
+  "flags": {
+    "metastatic": [
+      "metastas[ie]s",
+      "metastatico",
+      "metastatica",
+      "m1",
+      "diseminad[oa]",
+      "estadio\\s+iv",
+      "etapa\\s+iv",
+      "stage\\s+iv"
+    ]
+  }
+}

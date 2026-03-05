@@ -316,6 +316,11 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE bot_consultations ADD COLUMN clinical_metadata_json TEXT DEFAULT '{}'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     # Bot user extra fields
     for col, defn in [
         ("email", "TEXT DEFAULT NULL"),
@@ -1187,7 +1192,8 @@ def log_bot_consultation(telegram_id: int, specialty: str, query_type: str,
                          rag_chunks_used: int = 0, is_free_tier: bool = True,
                          citations: list[str] | None = None,
                          is_deepening: bool = False,
-                         parent_consultation_id: int | None = None) -> int:
+                         parent_consultation_id: int | None = None,
+                         clinical_metadata_json: str = "{}") -> int:
     import json
     citations_json = json.dumps(citations or [])
     conn = get_connection()
@@ -1197,13 +1203,15 @@ def log_bot_consultation(telegram_id: int, specialty: str, query_type: str,
                 (telegram_id, specialty, query_type, query_text, response_text,
                  response_time_seconds, llm_provider, llm_model,
                  tokens_input, tokens_output, rag_chunks_used, is_free_tier,
-                 citations_json, is_deepening, parent_consultation_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 citations_json, is_deepening, parent_consultation_id,
+                 clinical_metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (telegram_id, specialty, query_type, query_text, response_text,
               response_time_seconds, llm_provider, llm_model,
               tokens_input, tokens_output, rag_chunks_used,
               1 if is_free_tier else 0, citations_json,
-              1 if is_deepening else 0, parent_consultation_id))
+              1 if is_deepening else 0, parent_consultation_id,
+              clinical_metadata_json))
         conn.commit()
         return cursor.lastrowid
     finally:
@@ -1590,6 +1598,104 @@ def get_analytics_data(days: int | None = 30) -> dict:
         clinical["deepen_by_specialty"] = deepen_by_specialty
         clinical["top_deepened_queries"] = top_deepened
 
+        # ── Clinical Metadata Analytics ──
+        # Top diagnoses (with CIE-10 code)
+        meta_diagnoses = [dict(r) for r in conn.execute(f"""
+            SELECT json_extract(bc.clinical_metadata_json, '$.diagnosis') as diagnosis,
+                   MAX(json_extract(bc.clinical_metadata_json, '$.cie10')) as cie10,
+                   COUNT(*) as count
+            FROM bot_consultations bc
+            WHERE json_extract(bc.clinical_metadata_json, '$.diagnosis') IS NOT NULL
+              AND json_extract(bc.clinical_metadata_json, '$.diagnosis') != 'null'
+              {date_filter}
+            GROUP BY diagnosis ORDER BY count DESC LIMIT 15
+        """).fetchall()]
+
+        # Category distribution (solida vs hematologica)
+        meta_categories = [dict(r) for r in conn.execute(f"""
+            SELECT json_extract(bc.clinical_metadata_json, '$.category') as category,
+                   COUNT(*) as count
+            FROM bot_consultations bc
+            WHERE json_extract(bc.clinical_metadata_json, '$.category') IS NOT NULL
+              AND json_extract(bc.clinical_metadata_json, '$.category') != 'null'
+              {date_filter}
+            GROUP BY category ORDER BY count DESC
+        """).fetchall()]
+
+        # Stage distribution
+        meta_stages = [dict(r) for r in conn.execute(f"""
+            SELECT json_extract(bc.clinical_metadata_json, '$.clinical_details.stage') as stage,
+                   COUNT(*) as count
+            FROM bot_consultations bc
+            WHERE json_extract(bc.clinical_metadata_json, '$.clinical_details.stage') IS NOT NULL
+              AND json_extract(bc.clinical_metadata_json, '$.clinical_details.stage') != 'null'
+              {date_filter}
+            GROUP BY stage ORDER BY count DESC
+        """).fetchall()]
+
+        # Intent distribution
+        meta_intents = [dict(r) for r in conn.execute(f"""
+            SELECT json_extract(bc.clinical_metadata_json, '$.intent') as intent,
+                   COUNT(*) as count
+            FROM bot_consultations bc
+            WHERE json_extract(bc.clinical_metadata_json, '$.intent') IS NOT NULL
+              AND json_extract(bc.clinical_metadata_json, '$.intent') != 'null'
+              {date_filter}
+            GROUP BY intent ORDER BY count DESC
+        """).fetchall()]
+
+        # Top treatments (parse JSON array from each row)
+        all_meta_rows = conn.execute(f"""
+            SELECT bc.clinical_metadata_json FROM bot_consultations bc
+            WHERE bc.clinical_metadata_json != '{{}}'
+              AND bc.clinical_metadata_json IS NOT NULL
+              {date_filter}
+        """).fetchall()
+        treatment_counts: dict[str, int] = {}
+        meta_with_data = 0
+        for row in all_meta_rows:
+            try:
+                meta = _json.loads(row["clinical_metadata_json"])
+                if meta.get("diagnosis"):
+                    meta_with_data += 1
+                for drug in meta.get("treatments_mentioned", []):
+                    treatment_counts[drug] = treatment_counts.get(drug, 0) + 1
+            except (_json.JSONDecodeError, TypeError):
+                pass
+        meta_treatments = sorted(
+            [{"treatment": k, "count": v} for k, v in treatment_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        )[:15]
+
+        meta_coverage = round((meta_with_data / total_queries * 100) if total_queries > 0 else 0, 1)
+
+        # Diagnosis × deepening rate (with CIE-10)
+        meta_diag_deepen = [dict(r) for r in conn.execute(f"""
+            SELECT json_extract(bc.clinical_metadata_json, '$.diagnosis') as diagnosis,
+                   MAX(json_extract(bc.clinical_metadata_json, '$.cie10')) as cie10,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN bc.is_deepening = 1 THEN 1 ELSE 0 END) as deepened
+            FROM bot_consultations bc
+            WHERE json_extract(bc.clinical_metadata_json, '$.diagnosis') IS NOT NULL
+              AND json_extract(bc.clinical_metadata_json, '$.diagnosis') != 'null'
+              {date_filter}
+            GROUP BY diagnosis ORDER BY total DESC LIMIT 15
+        """).fetchall()]
+        for row in meta_diag_deepen:
+            row["deepening_rate"] = round(
+                (row["deepened"] / row["total"] * 100) if row["total"] > 0 else 0, 1
+            )
+
+        metadata = {
+            "coverage_pct": meta_coverage,
+            "top_diagnoses": meta_diagnoses,
+            "category_distribution": meta_categories,
+            "stage_distribution": meta_stages,
+            "intent_distribution": meta_intents,
+            "top_treatments": meta_treatments,
+            "diagnosis_deepening": meta_diag_deepen,
+        }
+
         return {
             "kpis": kpis,
             "time_series": time_series,
@@ -1597,6 +1703,7 @@ def get_analytics_data(days: int | None = 30) -> dict:
             "clinical": clinical,
             "feedback": feedback,
             "api_usage": api_usage,
+            "metadata": metadata,
         }
     finally:
         conn.close()

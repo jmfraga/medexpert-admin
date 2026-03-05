@@ -1608,6 +1608,39 @@ async def analytics_data(range: str = "30d"):
     return JSONResponse(data)
 
 
+@app.post("/api/analytics/backfill-metadata")
+async def backfill_metadata():
+    """Re-process existing consultations with clinical metadata extractor. Idempotent."""
+    import json as _json
+    from clinical_metadata import extract as extract_clinical_metadata
+
+    conn = db.get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT id, query_text, response_text, specialty FROM bot_consultations
+            WHERE clinical_metadata_json IS NULL
+               OR clinical_metadata_json = '{}'
+               OR clinical_metadata_json = ''
+        """).fetchall()
+
+        updated = 0
+        for row in rows:
+            meta = extract_clinical_metadata(
+                row["query_text"] or "", row["response_text"] or "", row["specialty"]
+            )
+            meta_json = _json.dumps(meta, ensure_ascii=False)
+            conn.execute(
+                "UPDATE bot_consultations SET clinical_metadata_json = ? WHERE id = ?",
+                (meta_json, row["id"]),
+            )
+            updated += 1
+
+        conn.commit()
+        return JSONResponse({"status": "ok", "updated": updated, "total": len(rows)})
+    finally:
+        conn.close()
+
+
 # ─────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────
