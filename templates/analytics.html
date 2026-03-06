@@ -85,6 +85,30 @@
     .feedback-legend span { font-size: 0.7em; color: #64748b; display: flex; align-items: center; gap: 4px; }
     .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
+    .export-dropdown { position: relative; display: inline-block; margin-left: 10px; }
+    .export-btn {
+        padding: 5px 14px; border-radius: 6px; border: 1px solid #2a3050;
+        background: #1a2040; color: #94a3b8; font-size: 0.78em; cursor: pointer;
+        transition: all 0.2s;
+    }
+    .export-btn:hover { background: #253060; color: #e0e6ed; }
+    .export-menu {
+        display: none; position: absolute; top: 100%; right: 0; margin-top: 4px;
+        background: #1a2040; border: 1px solid #2a3050; border-radius: 8px;
+        min-width: 140px; z-index: 100; overflow: hidden;
+    }
+    .export-menu.open { display: block; }
+    .export-menu a {
+        display: block; padding: 8px 14px; color: #94a3b8; font-size: 0.78em;
+        text-decoration: none; transition: background 0.15s;
+    }
+    .export-menu a:hover { background: #253060; color: #e0e6ed; }
+    .retention-badge {
+        display: inline-block; font-size: 0.68em; color: #64748b;
+        background: #111827; border: 1px solid #1e293b; border-radius: 6px;
+        padding: 3px 10px; margin-left: 12px; vertical-align: middle;
+    }
+
     .loading-overlay {
         position: fixed; top: 0; left: 200px; right: 0; bottom: 0;
         background: rgba(10, 14, 26, 0.85); z-index: 300;
@@ -103,12 +127,23 @@
 <div id="loadingOverlay" class="loading-overlay">Cargando datos...</div>
 
 <div class="analytics-header">
-    <h1>Analytics</h1>
-    <div class="range-btns">
-        <button class="range-btn" data-range="7d">7 dias</button>
-        <button class="range-btn active" data-range="30d">30 dias</button>
-        <button class="range-btn" data-range="90d">90 dias</button>
-        <button class="range-btn" data-range="all">Todo</button>
+    <h1>Analytics <span class="retention-badge">Texto &gt;30 dias anonimizado</span></h1>
+    <div style="display:flex;align-items:center;gap:6px;">
+        <div class="range-btns">
+            <button class="range-btn" data-range="7d">7 dias</button>
+            <button class="range-btn active" data-range="30d">30 dias</button>
+            <button class="range-btn" data-range="90d">90 dias</button>
+            <button class="range-btn" data-range="all">Todo</button>
+        </div>
+        <div class="export-dropdown">
+            <button class="export-btn" id="exportBtn">&#11015; Exportar CSV</button>
+            <div class="export-menu" id="exportMenu">
+                <a href="#" data-section="consultations">Consultas</a>
+                <a href="#" data-section="users">Usuarios</a>
+                <a href="#" data-section="costs">Costos</a>
+                <a href="#" data-section="all">Todo</a>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -674,12 +709,33 @@ function loadData(range) {
     });
 }
 
+// Track current range
+let currentRange = '30d';
+
 // Range button handlers
 document.querySelectorAll('.range-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('.range-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        loadData(btn.dataset.range);
+        currentRange = btn.dataset.range;
+        loadData(currentRange);
+    });
+});
+
+// Export CSV dropdown
+document.getElementById('exportBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('exportMenu').classList.toggle('open');
+});
+document.addEventListener('click', () => {
+    document.getElementById('exportMenu').classList.remove('open');
+});
+document.querySelectorAll('#exportMenu a').forEach(a => {
+    a.addEventListener('click', (e) => {
+        e.preventDefault();
+        const section = a.dataset.section;
+        window.location = `/api/analytics/export?range=${currentRange}&section=${section}`;
+        document.getElementById('exportMenu').classList.remove('open');
     });
 });
 

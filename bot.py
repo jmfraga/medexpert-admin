@@ -51,6 +51,51 @@ _SOURCE_LABELS = {
     "IMSS": "IMSS/GPC (Guias Practica Clinica)",
 }
 
+# ── Rate Limiting ──
+from collections import deque
+import time
+
+_rate_limits: dict[int, deque] = {}  # telegram_id → deque of timestamps
+
+RATE_LIMITS = {
+    "free": (5, 86400),       # 5 per day (safety net, primary limit is FREE_QUERY_LIMIT)
+    "basico": (30, 3600),     # 30 per hour
+    "premium": (60, 3600),    # 60 per hour
+}
+
+
+def check_rate_limit(telegram_id: int, plan: str) -> tuple[bool, int]:
+    """Check if user is within rate limits.
+
+    Returns (allowed, seconds_until_next_slot).
+    """
+    # Read overrides from settings
+    settings = db.get_all_settings()
+    limits = dict(RATE_LIMITS)
+    for tier in ("basico", "premium"):
+        key = f"rate_limit_{tier}"
+        if key in settings:
+            try:
+                reqs, window = settings[key].split("/")
+                limits[tier] = (int(reqs), int(window))
+            except (ValueError, AttributeError):
+                pass
+
+    max_requests, window = limits.get(plan, (30, 3600))
+    now = time.time()
+    if telegram_id not in _rate_limits:
+        _rate_limits[telegram_id] = deque()
+    q = _rate_limits[telegram_id]
+    # Purge old entries
+    while q and q[0] < now - window:
+        q.popleft()
+    if len(q) >= max_requests:
+        wait = int(q[0] + window - now) + 1
+        return False, wait
+    q.append(now)
+    return True, 0
+
+
 # LLM brain (initialized on first query per specialty)
 _brains: dict[str, BotBrain] = {}
 
@@ -1144,6 +1189,17 @@ async def handle_voice(update, context):
         await _show_limit_reached(update)
         return
 
+    # Rate limit (per-hour for paid users)
+    user_plan = db.get_bot_user_plan(user.id)
+    allowed, wait_seconds = check_rate_limit(user.id, user_plan)
+    if not allowed:
+        await update.message.reply_text(
+            f"Has alcanzado el limite de consultas por hora. "
+            f"Intenta de nuevo en {wait_seconds} segundos.",
+            parse_mode="HTML",
+        )
+        return
+
     # Ensure user exists
     db.get_or_create_bot_user(
         telegram_id=user.id,
@@ -1322,6 +1378,17 @@ async def handle_text(update, context):
     # Check limits
     if not db.can_bot_user_query(user.id, specialty, FREE_QUERY_LIMIT):
         await _show_limit_reached(update)
+        return
+
+    # Rate limit (per-hour for paid users)
+    user_plan = db.get_bot_user_plan(user.id)
+    allowed, wait_seconds = check_rate_limit(user.id, user_plan)
+    if not allowed:
+        await update.message.reply_text(
+            f"Has alcanzado el limite de consultas por hora. "
+            f"Intenta de nuevo en {wait_seconds} segundos.",
+            parse_mode="HTML",
+        )
         return
 
     # Ensure user exists

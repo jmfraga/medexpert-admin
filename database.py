@@ -1765,6 +1765,125 @@ def get_analytics_data(days: int | None = 30) -> dict:
         conn.close()
 
 
+def get_analytics_export_data(days: int | None, section: str) -> dict:
+    """Export analytics data as lists of dicts for CSV generation.
+
+    Args:
+        days: Number of days to look back (None for all time)
+        section: 'consultations', 'users', 'costs', or 'all'
+
+    Returns:
+        Dict with keys matching sections, each value a list of dicts (rows).
+    """
+    import json as _json
+    conn = get_connection()
+    try:
+        date_filter = ""
+        date_filter_users = ""
+        if days:
+            date_filter = f"AND bc.created_at >= datetime('now', '-{days} days')"
+            date_filter_users = f"AND bu.created_at >= datetime('now', '-{days} days')"
+
+        result = {}
+
+        if section in ("consultations", "all"):
+            rows = conn.execute(f"""
+                SELECT bc.id, bc.created_at, bc.telegram_id,
+                       COALESCE(bu.username, '') as username,
+                       bc.specialty, bc.query_type, bc.llm_model,
+                       bc.tokens_input, bc.tokens_output,
+                       ROUND(bc.response_time_seconds, 2) as response_time,
+                       bc.is_deepening, bc.user_feedback,
+                       bc.rag_chunks_used, bc.is_free_tier,
+                       SUBSTR(bc.query_text, 1, 200) as query_text_short,
+                       bc.clinical_metadata_json
+                FROM bot_consultations bc
+                LEFT JOIN bot_users bu ON bc.telegram_id = bu.telegram_id
+                WHERE 1=1 {date_filter}
+                ORDER BY bc.created_at DESC
+            """).fetchall()
+            result["consultations"] = [dict(r) for r in rows]
+
+        if section in ("users", "all"):
+            rows = conn.execute(f"""
+                SELECT bu.telegram_id, bu.username, bu.first_name, bu.last_name,
+                       bu.subscription_plan, bu.subscription_status,
+                       bu.created_at, bu.last_activity, bu.email,
+                       bu.is_verified, bu.specialty,
+                       (SELECT COUNT(*) FROM bot_consultations bc
+                        WHERE bc.telegram_id = bu.telegram_id) as total_queries
+                FROM bot_users bu
+                WHERE 1=1 {date_filter_users}
+                ORDER BY bu.last_activity DESC
+            """).fetchall()
+            result["users"] = [dict(r) for r in rows]
+
+        if section in ("costs", "all"):
+            _COST_PER_1K = {
+                "claude-sonnet-4-20250514": (0.003, 0.015),
+                "claude-opus-4-6": (0.015, 0.075),
+                "openai/gpt-oss-120b": (0.0, 0.0),
+            }
+            rows = conn.execute(f"""
+                SELECT date(bc.created_at) as day, bc.llm_model as model,
+                       SUM(bc.tokens_input) as tokens_in,
+                       SUM(bc.tokens_output) as tokens_out,
+                       COUNT(*) as queries
+                FROM bot_consultations bc
+                WHERE bc.llm_model != '' {date_filter}
+                GROUP BY day, bc.llm_model ORDER BY day DESC
+            """).fetchall()
+            costs = []
+            for row in rows:
+                rates = _COST_PER_1K.get(row["model"], (0.003, 0.015))
+                cost = round(
+                    (row["tokens_in"] / 1000) * rates[0] + (row["tokens_out"] / 1000) * rates[1], 4
+                )
+                costs.append({
+                    "day": row["day"],
+                    "model": row["model"],
+                    "queries": row["queries"],
+                    "tokens_in": row["tokens_in"],
+                    "tokens_out": row["tokens_out"],
+                    "cost_usd": cost,
+                })
+            result["costs"] = costs
+
+        return result
+    finally:
+        conn.close()
+
+
+def anonymize_old_consultations(retention_days: int = 30) -> int:
+    """Anonymize consultation text older than retention_days.
+
+    Replaces query_text and response_text with '[ANONIMIZADO]' while
+    preserving all numeric/stats columns for analytics.
+
+    Returns count of anonymized rows.
+    """
+    # Read retention_days from settings if available
+    settings = get_all_settings()
+    if "retention_days" in settings:
+        try:
+            retention_days = int(settings["retention_days"])
+        except (ValueError, TypeError):
+            pass
+
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""
+            UPDATE bot_consultations
+            SET query_text = '[ANONIMIZADO]', response_text = '[ANONIMIZADO]'
+            WHERE created_at < datetime('now', ? || ' days')
+              AND query_text != '[ANONIMIZADO]'
+        """, (f"-{retention_days}",))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def get_bot_consultation_by_id(consultation_id: int) -> dict | None:
     conn = get_connection()
     row = conn.execute("SELECT * FROM bot_consultations WHERE id = ?",

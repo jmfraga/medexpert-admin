@@ -25,7 +25,7 @@ from rich.panel import Panel
 
 import uvicorn
 from fastapi import FastAPI, Request, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -1739,6 +1739,51 @@ async def analytics_data(range: str = "30d"):
     return JSONResponse(data)
 
 
+@app.get("/api/analytics/export")
+async def analytics_export(range: str = "30d", section: str = "all"):
+    """Export analytics data as CSV download."""
+    import csv
+    import io
+    from datetime import datetime as _dt
+
+    days_map = {"7d": 7, "30d": 30, "90d": 90, "all": None}
+    days = days_map.get(range, 30)
+    if section not in ("consultations", "users", "costs", "all"):
+        section = "all"
+
+    data = db.get_analytics_export_data(days, section)
+
+    output = io.StringIO()
+    sections_to_export = [section] if section != "all" else ["consultations", "users", "costs"]
+
+    for i, sec in enumerate(sections_to_export):
+        rows = data.get(sec, [])
+        if not rows:
+            continue
+        if section == "all" and i > 0:
+            output.write("\n")
+        if section == "all":
+            output.write(f"--- {sec.upper()} ---\n")
+
+        writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+
+    filename = f"medexpert_{section}_{range}_{_dt.now().strftime('%Y%m%d')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.post("/api/analytics/anonymize")
+async def analytics_anonymize():
+    """Manually trigger anonymization of old consultations."""
+    count = db.anonymize_old_consultations()
+    return JSONResponse({"anonymized": count})
+
+
 @app.post("/api/analytics/backfill-metadata")
 async def backfill_metadata():
     """Re-process existing consultations with clinical metadata extractor. Idempotent."""
@@ -1786,6 +1831,11 @@ if __name__ == "__main__":
 
     db.init_db()
     init_auth_db()
+
+    # Anonymize old consultation text (data retention)
+    anon_count = db.anonymize_old_consultations()
+    if anon_count > 0:
+        console.print(f"[yellow]Anonymized {anon_count} consultations (>retention period)[/yellow]")
 
     # Ensure expert directories
     for expert in db.get_all_experts():
