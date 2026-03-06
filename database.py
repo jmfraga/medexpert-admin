@@ -1158,6 +1158,16 @@ def can_bot_user_query(telegram_id: int, specialty: str, free_limit: int = 5) ->
     return used < free_limit
 
 
+def count_bot_paid_queries(telegram_id: int) -> int:
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT COUNT(*) as cnt FROM bot_consultations
+        WHERE telegram_id = ? AND is_free_tier = 0
+    """, (telegram_id,)).fetchone()
+    conn.close()
+    return row["cnt"] if row else 0
+
+
 def get_bot_user_plan(telegram_id: int) -> str:
     """Return user's active plan: 'free', 'basic', or 'premium'."""
     user = get_bot_user(telegram_id)

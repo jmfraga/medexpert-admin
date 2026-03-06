@@ -39,9 +39,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 # Constants
-FREE_QUERY_LIMIT = 10
-VERIFICATION_REMINDER_AT = 5   # Nudge to verify at this query count
-VERIFICATION_REQUIRED_AT = 10  # Block until verified at this count
+FREE_QUERY_LIMIT = 5
+VERIFICATION_REMINDER_AT = 3   # Nudge to verify during free tier
+PAID_VERIFICATION_REQUIRED_AT = 5  # Block paid users until verified at this paid query count
 PAID_DEEPEN_LIMIT_MONTHLY = 10  # Max deepenings per month for paid tier
 DISCLAIMER_SHOWN_KEY = "disclaimer_shown"
 
@@ -1246,6 +1246,9 @@ async def _check_terms_and_verification(update, user_id) -> bool:
     """Check terms acceptance and verification status.
 
     Returns True if user can proceed, False if blocked.
+    Flow:
+      - Must accept terms (always)
+      - Paid users: block at PAID_VERIFICATION_REQUIRED_AT paid queries if not verified
     """
     bot_user = db.get_bot_user(user_id)
     if not bot_user:
@@ -1260,39 +1263,60 @@ async def _check_terms_and_verification(update, user_id) -> bool:
         )
         return False
 
-    # Verification enforcement (count all queries, not just free)
-    total_queries = db.count_bot_free_queries(user_id, "oncologia")
+    # Paid users: require verification after N paid queries
     is_verified = bot_user.get("is_verified") or bot_user.get("verification_status") == "pending"
-
-    if not is_verified and total_queries >= VERIFICATION_REQUIRED_AT:
-        await update.message.reply_text(
-            "<b>Verificacion requerida</b>\n\n"
-            f"Has usado tus {VERIFICATION_REQUIRED_AT} consultas de prueba.\n"
-            "Para continuar, necesitas verificar tu cedula profesional.\n\n"
-            "Usa /verificar para enviar tus documentos.",
-            parse_mode="HTML",
-        )
-        return False
+    user_plan = db.get_bot_user_plan(user_id)
+    if user_plan in ("basic", "premium") and not is_verified:
+        paid_queries = db.count_bot_paid_queries(user_id)
+        if paid_queries >= PAID_VERIFICATION_REQUIRED_AT:
+            await update.message.reply_text(
+                "<b>Verificacion profesional requerida</b>\n\n"
+                "Para continuar usando MedExpert necesitas verificar "
+                "tu cedula profesional.\n\n"
+                "Esto nos ayuda a garantizar que la plataforma es usada "
+                "exclusivamente por profesionales de la salud.\n\n"
+                "Usa /verificar para enviar tus documentos.\n"
+                "<i>Es rapido: solo necesitas foto de cedula e INE.</i>",
+                parse_mode="HTML",
+            )
+            return False
 
     return True
 
 
 async def _send_verification_nudge(update, user_id):
-    """Send a verification reminder after VERIFICATION_REMINDER_AT queries."""
+    """Send verification reminder at the right moment.
+
+    - Free tier, query #3: gentle nudge
+    - Paid tier, query #3 of paid: reminder before hard block at #5
+    """
     bot_user = db.get_bot_user(user_id)
     if not bot_user:
         return
     is_verified = bot_user.get("is_verified") or bot_user.get("verification_status") == "pending"
     if is_verified:
         return
-    total_queries = db.count_bot_free_queries(user_id, "oncologia")
-    remaining = VERIFICATION_REQUIRED_AT - total_queries
-    if total_queries >= VERIFICATION_REMINDER_AT and remaining > 0:
-        await update.message.reply_text(
-            f"<i>Te quedan {remaining} consultas de prueba. "
-            "Verifica tu cedula profesional con /verificar para acceso completo.</i>",
-            parse_mode="HTML",
-        )
+
+    user_plan = db.get_bot_user_plan(user_id)
+
+    if user_plan == "free":
+        free_used = db.count_bot_free_queries(user_id, "oncologia")
+        remaining = FREE_QUERY_LIMIT - free_used
+        if free_used >= VERIFICATION_REMINDER_AT and remaining > 0:
+            await update.message.reply_text(
+                f"<i>Te quedan {remaining} consultas gratis. "
+                "Verifica tu cedula con /verificar para acceso completo.</i>",
+                parse_mode="HTML",
+            )
+    elif user_plan in ("basic", "premium"):
+        paid_used = db.count_bot_paid_queries(user_id)
+        remaining = PAID_VERIFICATION_REQUIRED_AT - paid_used
+        if paid_used >= VERIFICATION_REMINDER_AT and remaining > 0:
+            await update.message.reply_text(
+                f"<i>Recuerda verificar tu cedula profesional con /verificar. "
+                f"Sera requerido en {remaining} consultas mas.</i>",
+                parse_mode="HTML",
+            )
 
 
 async def handle_voice(update, context):
@@ -1612,19 +1636,17 @@ async def _show_limit_reached(update):
     """Show message when free queries are exhausted."""
     msg = (
         "<b>Limite de consultas gratuitas alcanzado</b>\n\n"
-        f"Has usado tus {FREE_QUERY_LIMIT} consultas de prueba.\n\n"
-        "<b>Para continuar necesitas:</b>\n"
-        "1. Verificar tu cedula profesional: /verificar\n"
-        "2. Activar una suscripcion: /suscribir\n\n"
-        "<b>Plan Basico - $14.99 USD/mes</b> (precio de lanzamiento)\n"
+        f"Has usado tus {FREE_QUERY_LIMIT} consultas gratis.\n"
+        "Para seguir consultando, activa tu suscripcion:\n\n"
+        "<b>Plan Basico - $14.99 USD/mes</b>\n"
         "  Consultas ilimitadas\n"
         "  Profundizar con GPT-OSS 120B\n"
         "  Cancela cuando quieras\n\n"
-        "<b>Plan Premium - $24.99 USD/mes</b> (precio de lanzamiento)\n"
+        "<b>Plan Premium - $24.99 USD/mes</b>\n"
         "  Todo lo del Plan Basico\n"
         "  Profundizar con Claude Opus 4.6\n"
         "  Soporte prioritario\n\n"
-        "Invita colegas con tu codigo de referido: /estado"
+        "Usa /suscribir para activar"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
 
