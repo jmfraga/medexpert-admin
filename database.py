@@ -400,6 +400,12 @@ def init_db():
             conn.commit()
         except sqlite3.OperationalError:
             pass
+    # Terms acceptance
+    try:
+        conn.execute("ALTER TABLE bot_users ADD COLUMN terms_accepted_at TEXT DEFAULT NULL")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
     # Per-expert LLM config columns
     for col, defn in [
         ("base_provider", "TEXT DEFAULT NULL"),
@@ -1107,7 +1113,7 @@ def update_bot_user(telegram_id: int, **kwargs):
     conn = get_connection()
     allowed = {"username", "first_name", "last_name", "specialty",
                "is_verified", "referred_by", "last_activity", "email",
-               "source_preferences_json"}
+               "source_preferences_json", "terms_accepted_at"}
     nullable = {"source_preferences_json"}
     updates, params = [], []
     for key, val in kwargs.items():

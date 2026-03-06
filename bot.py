@@ -15,6 +15,7 @@ import asyncio
 import logging
 import tempfile
 import argparse
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -38,7 +39,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 # Constants
-FREE_QUERY_LIMIT = 5
+FREE_QUERY_LIMIT = 10
+VERIFICATION_REMINDER_AT = 5   # Nudge to verify at this query count
+VERIFICATION_REQUIRED_AT = 10  # Block until verified at this count
 PAID_DEEPEN_LIMIT_MONTHLY = 10  # Max deepenings per month for paid tier
 DISCLAIMER_SHOWN_KEY = "disclaimer_shown"
 
@@ -121,7 +124,7 @@ def get_brain(expert_slug: str = "oncologia") -> BotBrain:
 # ─────────────────────────────────────────────
 
 async def cmd_start(update, context):
-    """Handle /start command — register user, show welcome."""
+    """Handle /start command — register user, show welcome + terms acceptance."""
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     user = update.effective_user
@@ -161,6 +164,59 @@ async def cmd_start(update, context):
                 logger.info(f"Referral processed: {ref_code} -> {user.id}")
             # Continue to show welcome
 
+    # If terms not accepted, show terms first
+    if not bot_user.get("terms_accepted_at"):
+        terms_msg = (
+            f"<b>MedExpert - Bienvenido Dr. {user.first_name}</b>\n\n"
+            "Antes de comenzar, necesitas aceptar nuestros terminos:\n\n"
+            "1. MedExpert es una herramienta de <b>apoyo</b> clinico. "
+            "NO reemplaza el criterio medico profesional.\n"
+            "2. El medico es siempre responsable de las decisiones clinicas.\n"
+            "3. Tus consultas se anonimizan y los datos de texto se eliminan a los 30 dias.\n"
+            "4. No debes incluir datos personales identificables de pacientes.\n\n"
+            'Terminos completos: <a href="https://www.medexpert.mx/terminos.html">Terminos de Servicio</a> | '
+            '<a href="https://www.medexpert.mx/privacidad.html">Politica de Privacidad</a>'
+        )
+        keyboard = [[InlineKeyboardButton(
+            "Acepto los terminos", callback_data="accept_terms"
+        )]]
+        await update.message.reply_text(
+            terms_msg, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            disable_web_page_preview=True,
+        )
+        logger.info(f"User {user.id} (@{user.username}) — terms pending")
+        return
+
+    # Terms accepted — show normal welcome
+    await _send_welcome(update, context, bot_user)
+
+
+async def handle_accept_terms(update, context):
+    """Handle terms acceptance callback."""
+    query = update.callback_query
+    await query.answer()
+
+    user = query.from_user
+    db.update_bot_user(user.id, terms_accepted_at=datetime.now().isoformat())
+
+    await query.edit_message_text(
+        "Terminos aceptados. Bienvenido a MedExpert!",
+        parse_mode="HTML",
+    )
+
+    # Now send the full welcome
+    bot_user = db.get_bot_user(user.id)
+    await _send_welcome(update, context, bot_user)
+
+
+async def _send_welcome(update, context, bot_user):
+    """Send the full welcome message."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    user = update.effective_user
+    specialty = context.bot_data.get("specialty", "oncologia")
+
     free_used = db.count_bot_free_queries(user.id, specialty)
     free_remaining = max(0, FREE_QUERY_LIMIT - free_used)
 
@@ -171,7 +227,6 @@ async def cmd_start(update, context):
     from rag_engine import get_rag_for_expert
     rag = get_rag_for_expert(specialty)
     guidelines_count = len(rag.list_guidelines())
-    chunks_count = rag.get_total_count()
 
     welcome = (
         f"<b>MedExpert {expert_name}</b>\n\n"
@@ -212,7 +267,15 @@ async def cmd_start(update, context):
         f"médico profesional.</i>"
     )
 
-    await update.message.reply_text(welcome, parse_mode="HTML")
+    # If not verified, add verification nudge
+    if not bot_user.get("is_verified") and bot_user.get("verification_status", "none") == "none":
+        welcome += (
+            "\n\n<b>Verifica tu cedula profesional</b> con /verificar "
+            "para acceder a todas las funciones."
+        )
+
+    msg = update.message or update.callback_query.message
+    await msg.reply_text(welcome, parse_mode="HTML")
     logger.info(f"User {user.id} (@{user.username}) started bot ({specialty})")
 
 
@@ -1179,10 +1242,67 @@ async def handle_source_reset(update, context):
     await query.answer("Fuentes restablecidas")
 
 
+async def _check_terms_and_verification(update, user_id) -> bool:
+    """Check terms acceptance and verification status.
+
+    Returns True if user can proceed, False if blocked.
+    """
+    bot_user = db.get_bot_user(user_id)
+    if not bot_user:
+        return True  # Will be created shortly
+
+    # Must accept terms first
+    if not bot_user.get("terms_accepted_at"):
+        await update.message.reply_text(
+            "Necesitas aceptar los terminos antes de usar MedExpert.\n"
+            "Usa /start para comenzar.",
+            parse_mode="HTML",
+        )
+        return False
+
+    # Verification enforcement (count all queries, not just free)
+    total_queries = db.count_bot_free_queries(user_id, "oncologia")
+    is_verified = bot_user.get("is_verified") or bot_user.get("verification_status") == "pending"
+
+    if not is_verified and total_queries >= VERIFICATION_REQUIRED_AT:
+        await update.message.reply_text(
+            "<b>Verificacion requerida</b>\n\n"
+            f"Has usado tus {VERIFICATION_REQUIRED_AT} consultas de prueba.\n"
+            "Para continuar, necesitas verificar tu cedula profesional.\n\n"
+            "Usa /verificar para enviar tus documentos.",
+            parse_mode="HTML",
+        )
+        return False
+
+    return True
+
+
+async def _send_verification_nudge(update, user_id):
+    """Send a verification reminder after VERIFICATION_REMINDER_AT queries."""
+    bot_user = db.get_bot_user(user_id)
+    if not bot_user:
+        return
+    is_verified = bot_user.get("is_verified") or bot_user.get("verification_status") == "pending"
+    if is_verified:
+        return
+    total_queries = db.count_bot_free_queries(user_id, "oncologia")
+    remaining = VERIFICATION_REQUIRED_AT - total_queries
+    if total_queries >= VERIFICATION_REMINDER_AT and remaining > 0:
+        await update.message.reply_text(
+            f"<i>Te quedan {remaining} consultas de prueba. "
+            "Verifica tu cedula profesional con /verificar para acceso completo.</i>",
+            parse_mode="HTML",
+        )
+
+
 async def handle_voice(update, context):
     """Process voice message: download → transcribe → query → respond."""
     user = update.effective_user
     specialty = context.bot_data.get("specialty", "oncologia")
+
+    # Terms + verification gate
+    if not await _check_terms_and_verification(update, user.id):
+        return
 
     # Check limits
     if not db.can_bot_user_query(user.id, specialty, FREE_QUERY_LIMIT):
@@ -1311,6 +1431,9 @@ async def handle_voice(update, context):
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
+        # Verification nudge at query #5
+        await _send_verification_nudge(update, user.id)
+
     except Exception as e:
         logger.error(f"Voice processing error: {e}", exc_info=True)
         try:
@@ -1373,6 +1496,10 @@ async def handle_text(update, context):
             "Te notificaremos cuando tengamos una respuesta.",
             parse_mode="HTML",
         )
+        return
+
+    # Terms + verification gate
+    if not await _check_terms_and_verification(update, user.id):
         return
 
     # Check limits
@@ -1468,6 +1595,9 @@ async def handle_text(update, context):
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
+        # Verification nudge at query #5
+        await _send_verification_nudge(update, user.id)
+
     except Exception as e:
         logger.error(f"Text processing error: {e}", exc_info=True)
         try:
@@ -1482,18 +1612,18 @@ async def _show_limit_reached(update):
     """Show message when free queries are exhausted."""
     msg = (
         "<b>Limite de consultas gratuitas alcanzado</b>\n\n"
-        "Has usado tus 5 consultas gratis.\n\n"
+        f"Has usado tus {FREE_QUERY_LIMIT} consultas de prueba.\n\n"
+        "<b>Para continuar necesitas:</b>\n"
+        "1. Verificar tu cedula profesional: /verificar\n"
+        "2. Activar una suscripcion: /suscribir\n\n"
         "<b>Plan Basico - $14.99 USD/mes</b> (precio de lanzamiento)\n"
         "  Consultas ilimitadas\n"
         "  Profundizar con GPT-OSS 120B\n"
-        "  Respuesta en menos de 5 segundos\n"
         "  Cancela cuando quieras\n\n"
         "<b>Plan Premium - $24.99 USD/mes</b> (precio de lanzamiento)\n"
         "  Todo lo del Plan Basico\n"
         "  Profundizar con Claude Opus 4.6\n"
-        "  Respuestas de maxima calidad clinica\n"
         "  Soporte prioritario\n\n"
-        "/suscribir para activar\n\n"
         "Invita colegas con tu codigo de referido: /estado"
     )
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -1998,6 +2128,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_pay_clip, pattern=r"^pay_clip_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_source_toggle, pattern=r"^src_(NCCN|ESMO|NCI|IMSS)$"))
     app.add_handler(CallbackQueryHandler(handle_source_reset, pattern=r"^src_reset$"))
+    app.add_handler(CallbackQueryHandler(handle_accept_terms, pattern=r"^accept_terms$"))
 
     # Error handler
     app.add_error_handler(handle_error)
