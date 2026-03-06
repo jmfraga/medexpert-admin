@@ -406,6 +406,33 @@ def init_db():
         conn.commit()
     except sqlite3.OperationalError:
         pass
+    # Migrate verification_documents to accept 'titulo' doc_type
+    try:
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='verification_documents'").fetchone()
+        if row and "'titulo'" not in row[0]:
+            conn.execute("ALTER TABLE verification_documents RENAME TO verification_documents_old")
+            conn.execute("""
+                CREATE TABLE verification_documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER NOT NULL,
+                    doc_type TEXT NOT NULL CHECK(doc_type IN ('cedula', 'titulo', 'ine')),
+                    file_path TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+                    admin_notes TEXT DEFAULT '',
+                    created_at TEXT DEFAULT (datetime('now')),
+                    reviewed_at TEXT,
+                    FOREIGN KEY (telegram_id) REFERENCES bot_users(telegram_id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("""
+                INSERT INTO verification_documents
+                SELECT * FROM verification_documents_old
+            """)
+            conn.execute("DROP TABLE verification_documents_old")
+            conn.commit()
+            console.print("[green]verification_documents migrated (added titulo doc_type)[/green]")
+    except Exception as e:
+        console.print(f"[yellow]Verification docs migration note: {e}[/yellow]")
     # Per-expert LLM config columns
     for col, defn in [
         ("base_provider", "TEXT DEFAULT NULL"),

@@ -270,7 +270,7 @@ async def _send_welcome(update, context, bot_user):
     # If not verified, add verification nudge
     if not bot_user.get("is_verified") and bot_user.get("verification_status", "none") == "none":
         welcome += (
-            "\n\n<b>Verifica tu cedula profesional</b> con /verificar "
+            "\n\n<b>Verifica tu titulo profesional</b> con /verificar "
             "para acceder a todas las funciones."
         )
 
@@ -413,14 +413,17 @@ async def cmd_verificar(update, context):
         )
         return
 
-    context.user_data["awaiting_verification"] = "cedula"
+    context.user_data["awaiting_verification"] = "titulo"
     await update.message.reply_text(
-        "<b>Verificación Médica</b>\n\n"
+        "<b>Verificacion Profesional</b>\n\n"
         "Para verificar tu identidad como profesional de la salud, necesitamos:\n\n"
-        "1️⃣ <b>Cédula profesional</b> — foto legible\n"
-        "2️⃣ <b>INE/Identificación oficial</b> — foto legible\n\n"
-        "📷 Envía ahora la <b>foto de tu cédula profesional</b>.\n\n"
-        "<i>Tus documentos se almacenan de forma segura y solo serán revisados "
+        "1. <b>Documento profesional</b> (cualquiera de estos):\n"
+        "   - Cedula profesional (Mexico)\n"
+        "   - Titulo o licencia medica\n"
+        "   - Certificado de consejo/board certification\n\n"
+        "2. <b>Identificacion oficial</b> (INE, DNI, pasaporte, etc.)\n\n"
+        "Envia ahora la <b>foto de tu documento profesional</b>.\n\n"
+        "<i>Tus documentos se almacenan de forma segura y solo seran revisados "
         "por el equipo de MedExpert.</i>\n\n"
         "Usa /cancelar para cancelar.",
         parse_mode="HTML",
@@ -457,11 +460,12 @@ async def handle_verification_photo(update, context):
     # Save to DB
     db.create_verification_doc(user.id, step, str(filepath))
 
-    if step == "cedula":
+    if step == "titulo":
         context.user_data["awaiting_verification"] = "ine"
         await update.message.reply_text(
-            "✅ Cédula recibida.\n\n"
-            "📷 Ahora envía la <b>foto de tu INE</b> (identificación oficial).",
+            "Documento profesional recibido.\n\n"
+            "Ahora envia la <b>foto de tu identificacion oficial</b> "
+            "(INE, DNI, pasaporte, etc.).",
             parse_mode="HTML",
         )
     elif step == "ine":
@@ -469,8 +473,8 @@ async def handle_verification_photo(update, context):
         # Update user status
         db.update_bot_user(user.id, verification_status="pending")
         await update.message.reply_text(
-            "✅ INE recibida.\n\n"
-            "Tus documentos están en revisión. Te notificaremos cuando sean aprobados.\n"
+            "Identificacion recibida.\n\n"
+            "Tus documentos estan en revision. Te notificaremos cuando sean aprobados.\n"
             "Esto generalmente toma menos de 24 horas."
         )
         logger.info(f"Verification docs submitted by {user.id}")
@@ -1272,11 +1276,11 @@ async def _check_terms_and_verification(update, user_id) -> bool:
             await update.message.reply_text(
                 "<b>Verificacion profesional requerida</b>\n\n"
                 "Para continuar usando MedExpert necesitas verificar "
-                "tu cedula profesional.\n\n"
+                "tu identidad como profesional de la salud.\n\n"
                 "Esto nos ayuda a garantizar que la plataforma es usada "
                 "exclusivamente por profesionales de la salud.\n\n"
                 "Usa /verificar para enviar tus documentos.\n"
-                "<i>Es rapido: solo necesitas foto de cedula e INE.</i>",
+                "<i>Es rapido: titulo/cedula/licencia + identificacion oficial.</i>",
                 parse_mode="HTML",
             )
             return False
@@ -1305,7 +1309,7 @@ async def _send_verification_nudge(update, user_id):
         if free_used >= VERIFICATION_REMINDER_AT and remaining > 0:
             await update.message.reply_text(
                 f"<i>Te quedan {remaining} consultas gratis. "
-                "Verifica tu cedula con /verificar para acceso completo.</i>",
+                "Verifica tu titulo profesional con /verificar para acceso completo.</i>",
                 parse_mode="HTML",
             )
     elif user_plan in ("basic", "premium"):
@@ -1313,7 +1317,7 @@ async def _send_verification_nudge(update, user_id):
         remaining = PAID_VERIFICATION_REQUIRED_AT - paid_used
         if paid_used >= VERIFICATION_REMINDER_AT and remaining > 0:
             await update.message.reply_text(
-                f"<i>Recuerda verificar tu cedula profesional con /verificar. "
+                f"<i>Recuerda verificar tu titulo profesional con /verificar. "
                 f"Sera requerido en {remaining} consultas mas.</i>",
                 parse_mode="HTML",
             )
@@ -2164,7 +2168,7 @@ def main():
             BotCommand("estado", "Ver tu plan y consultas"),
             BotCommand("suscribir", "Ver planes de suscripcion"),
             BotCommand("codigo", "Aplicar codigo promocional"),
-            BotCommand("verificar", "Verificar cedula profesional"),
+            BotCommand("verificar", "Verificar titulo profesional"),
             BotCommand("congresos", "Proximos congresos medicos"),
             BotCommand("fuentes", "Elegir fuentes de guias clinicas"),
             BotCommand("soporte", "Contactar soporte"),
