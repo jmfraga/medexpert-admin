@@ -1,6 +1,11 @@
 #!/bin/bash
 # Deploy medexpert-admin to Mac Mini M1
 # Usage: ./deploy.sh [--no-push] [--no-chromadb]
+#
+# Services are managed by launchd (KeepAlive):
+#   com.medexpert.admin  — app.py --port 8081
+#   com.medexpert.bot    — bot.py --specialty oncologia
+# Restart via: launchctl kickstart -k gui/$(id -u)/<label>
 
 set -e
 
@@ -53,28 +58,33 @@ else
     echo "[3/4] Skipping ChromaDB sync (--no-chromadb)"
 fi
 
-# 4. Restart services (DB stays on M1 — production data is authoritative)
+# 4. Restart services via launchctl (DB stays on M1 — production data is authoritative)
 echo ""
-echo "[4/4] Restarting services..."
-
-# Restart admin web server
-echo "Restarting admin..."
-ssh "$M1_HOST" "pkill -9 -f 'python app.py' 2>/dev/null; sleep 2; cd $M1_PATH && nohup ./venv/bin/python app.py --port 8081 > /tmp/admin.log 2>&1 &"
-sleep 3
-ssh "$M1_HOST" "ps aux | grep 'python app.py' | grep -v grep | awk '{print \"  Admin PID:\", \$2}' || echo '  WARNING: admin not running'"
+echo "[4/4] Restarting services via launchctl..."
 
 # Clean Python cache to force fresh bytecode
 ssh "$M1_HOST" "rm -rf $M1_PATH/__pycache__" 2>/dev/null || true
 
+# Restart admin (launchctl kickstart -k = kill + relaunch, instant)
+echo "Restarting admin..."
+ssh "$M1_HOST" "launchctl kickstart -k gui/\$(id -u)/com.medexpert.admin"
+sleep 3
+ssh "$M1_HOST" "tail -3 /tmp/admin.log"
+
+# Restart bot (unload → wait for Telegram to release polling → load)
 echo "Stopping bot..."
-# Kill wrapper (run_bot.sh) and all bot instances
-ssh "$M1_HOST" "pkill -9 -f 'run_bot.sh' 2>/dev/null; pkill -9 -f 'python bot.py' 2>/dev/null; sleep 2; ps aux | grep -E 'run_bot|python bot' | grep -v grep || echo '  All stopped'"
-echo "Starting bot (with auto-restart wrapper)..."
-ssh "$M1_HOST" "cd $M1_PATH && nohup bash run_bot.sh > /dev/null 2>&1 &"
-sleep 20
-ssh "$M1_HOST" "tail -10 /tmp/bot.log"
-# Verify running
-ssh "$M1_HOST" "ps aux | grep 'python bot.py' | grep -v grep | awk '{print \"  PID:\", \$2}' || echo '  WARNING: bot not running yet (may be retrying)'"
+ssh "$M1_HOST" "launchctl unload ~/Library/LaunchAgents/com.medexpert.bot.plist 2>/dev/null; sleep 1; pkill -9 -f 'bot.py' 2>/dev/null || true"
+echo "Waiting 60s for Telegram to release polling lock..."
+sleep 60
+echo "Starting bot..."
+ssh "$M1_HOST" "> /tmp/bot.log; launchctl load ~/Library/LaunchAgents/com.medexpert.bot.plist"
+sleep 12
+ssh "$M1_HOST" "tail -8 /tmp/bot.log"
+
+# Verify both running
+echo ""
+echo "Verifying services..."
+ssh "$M1_HOST" "launchctl list | grep com.medexpert"
 
 echo ""
 echo "=== Deploy complete ==="
