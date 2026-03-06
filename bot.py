@@ -144,10 +144,18 @@ async def cmd_start(update, context):
         arg = context.args[0]
         if arg == "payment_success":
             context.user_data.pop("promo", None)
-            await update.message.reply_text(
-                "Pago recibido! Tu suscripcion se activara en unos momentos.\n"
-                "Usa /estado para verificar."
-            )
+            # Try to verify Clip payment immediately (webhook may be delayed)
+            activated = await _verify_clip_payment(user.id, context)
+            if activated:
+                await update.message.reply_text(
+                    "Pago con Clip confirmado! Tu suscripcion ya esta activa.\n"
+                    "Usa /estado para ver los detalles."
+                )
+            else:
+                await update.message.reply_text(
+                    "Pago recibido! Tu suscripcion se activara en unos momentos.\n"
+                    "Usa /estado para verificar."
+                )
             return
         elif arg == "payment_cancel":
             await update.message.reply_text(
@@ -1056,6 +1064,59 @@ async def handle_pay_paypal(update, context):
         await query.message.reply_text("Error con PayPal. Intenta Stripe o Mercado Pago.")
 
 
+async def _verify_clip_payment(telegram_id: int, context) -> bool:
+    """Poll Clip API to verify a pending checkout payment. Returns True if activated."""
+    import httpx
+    import base64
+
+    pending = context.user_data.pop("pending_clip", None)
+    if not pending:
+        return False
+
+    clip_api_key = os.getenv("CLIP_API_KEY")
+    clip_api_secret = os.getenv("CLIP_API_SECRET")
+    if not clip_api_key or not clip_api_secret:
+        return False
+
+    payment_request_id = pending["payment_request_id"]
+    ext_ref = pending["ext_ref"]
+    credentials = base64.b64encode(f"{clip_api_key}:{clip_api_secret}".encode()).decode()
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://api.payclip.com/v2/checkout/{payment_request_id}",
+                headers={"Authorization": f"Basic {credentials}"},
+                timeout=10.0,
+            )
+        data = resp.json()
+        status = data.get("status", "")
+        logger.info(f"Clip verify for {telegram_id}: {status} (id={payment_request_id})")
+
+        if status == "CHECKOUT_COMPLETED":
+            parts = ext_ref.split("_")
+            plan = parts[1] if len(parts) > 1 else "basico"
+            db.update_bot_user_subscription(
+                telegram_id=telegram_id,
+                plan=plan,
+                status="active",
+                stripe_customer_id=f"clip_{payment_request_id}",
+            )
+            # Track promo
+            if len(parts) > 2:
+                try:
+                    promo_id = int(parts[2])
+                    if db.validate_and_use_promo_code(promo_id):
+                        db.update_bot_user_promo(telegram_id, promo_id)
+                except (ValueError, IndexError):
+                    pass
+            logger.info(f"Clip subscription activated via polling: {telegram_id} -> {plan}")
+            return True
+    except Exception as e:
+        logger.error(f"Clip verify error: {e}")
+    return False
+
+
 async def handle_pay_clip(update, context):
     """Handle Clip payment — create checkout payment link (MXN)."""
     import httpx
@@ -1136,6 +1197,12 @@ async def handle_pay_clip(update, context):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
+        # Store checkout ID for polling when user returns
+        context.user_data["pending_clip"] = {
+            "payment_request_id": data.get("payment_request_id"),
+            "ext_ref": ext_ref,
+            "plan_key": plan_key,
+        }
         logger.info(f"Clip checkout for {user.id} ({plan_key}): {data.get('payment_request_id')}{' promo=' + promo['code'] if promo_id else ''}")
 
     except Exception as e:
