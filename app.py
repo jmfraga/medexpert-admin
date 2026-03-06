@@ -205,6 +205,8 @@ async def update_expert(expert_id: int, request: Request):
         base_model=data.get("base_model"),
         deepen_provider=data.get("deepen_provider"),
         deepen_model=data.get("deepen_model"),
+        deepen_premium_provider=data.get("deepen_premium_provider"),
+        deepen_premium_model=data.get("deepen_premium_model"),
     )
     return JSONResponse({"ok": True})
 

@@ -106,7 +106,9 @@ _brains: dict[str, BotBrain] = {}
 def get_brain(expert_slug: str = "oncologia") -> BotBrain:
     """Get or create a BotBrain instance per expert. Re-creates if config changed."""
     config = db.get_expert_llm_config(expert_slug)
-    cache_key = f"{expert_slug}:{config['base_provider']}:{config['base_model']}:{config['deepen_provider']}:{config['deepen_model']}"
+    cache_key = (f"{expert_slug}:{config['base_provider']}:{config['base_model']}"
+                 f":{config['deepen_provider']}:{config['deepen_model']}"
+                 f":{config['deepen_premium_provider']}:{config['deepen_premium_model']}")
     if cache_key not in _brains:
         # Clear old entries for this expert
         _brains.clear()
@@ -115,6 +117,8 @@ def get_brain(expert_slug: str = "oncologia") -> BotBrain:
             model=config["base_model"],
             deepen_provider=config["deepen_provider"],
             deepen_model=config["deepen_model"],
+            deepen_premium_provider=config["deepen_premium_provider"],
+            deepen_premium_model=config["deepen_premium_model"],
         )
     return _brains[cache_key]
 
@@ -1902,7 +1906,9 @@ async def _execute_deepen(update_or_query, context, consultation_id: int,
 
     # Build model label from config
     config = db.get_expert_llm_config(specialty)
-    if tier in ("premium", "basic"):
+    if tier == "premium":
+        model_label = config["deepen_premium_model"]
+    elif tier == "basic":
         model_label = config["deepen_model"]
     else:
         model_label = config["base_model"]

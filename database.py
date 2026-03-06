@@ -439,6 +439,8 @@ def init_db():
         ("base_model", "TEXT DEFAULT NULL"),
         ("deepen_provider", "TEXT DEFAULT NULL"),
         ("deepen_model", "TEXT DEFAULT NULL"),
+        ("deepen_premium_provider", "TEXT DEFAULT NULL"),
+        ("deepen_premium_model", "TEXT DEFAULT NULL"),
     ]:
         try:
             conn.execute(f"ALTER TABLE experts ADD COLUMN {col} {defn}")
@@ -530,7 +532,8 @@ def get_expert_by_slug(slug: str) -> dict | None:
 def update_expert(expert_id: int, name: str = None, system_prompt: str = None,
                   icon: str = None, base_provider: str = None,
                   base_model: str = None, deepen_provider: str = None,
-                  deepen_model: str = None):
+                  deepen_model: str = None, deepen_premium_provider: str = None,
+                  deepen_premium_model: str = None):
     conn = get_connection()
     updates, params = [], []
     if name is not None:
@@ -541,7 +544,9 @@ def update_expert(expert_id: int, name: str = None, system_prompt: str = None,
         updates.append("icon = ?"); params.append(icon)
     # LLM config: empty string → NULL (use global default)
     for col, val in [("base_provider", base_provider), ("base_model", base_model),
-                     ("deepen_provider", deepen_provider), ("deepen_model", deepen_model)]:
+                     ("deepen_provider", deepen_provider), ("deepen_model", deepen_model),
+                     ("deepen_premium_provider", deepen_premium_provider),
+                     ("deepen_premium_model", deepen_premium_model)]:
         if val is not None:
             updates.append(f"{col} = ?"); params.append(val if val else None)
     if updates:
@@ -563,7 +568,9 @@ def delete_expert(expert_id: int) -> bool:
 def get_expert_llm_config(expert_slug: str) -> dict:
     """Get resolved LLM config for an expert (expert override or global fallback).
 
-    Returns dict with: base_provider, base_model, deepen_provider, deepen_model
+    Returns dict with: base_provider, base_model,
+      deepen_provider, deepen_model (basic tier),
+      deepen_premium_provider, deepen_premium_model (premium tier)
     """
     settings = get_all_settings()
     expert = get_expert_by_slug(expert_slug)
@@ -572,12 +579,16 @@ def get_expert_llm_config(expert_slug: str) -> dict:
     base_model = (expert.get("base_model") if expert else None) or settings.get("default_model", "openai/gpt-oss-120b")
     deepen_provider = (expert.get("deepen_provider") if expert else None) or settings.get("default_deepen_provider", "anthropic")
     deepen_model = (expert.get("deepen_model") if expert else None) or settings.get("default_deepen_model", "claude-sonnet-4-20250514")
+    deepen_premium_provider = (expert.get("deepen_premium_provider") if expert else None) or settings.get("default_deepen_premium_provider", "anthropic")
+    deepen_premium_model = (expert.get("deepen_premium_model") if expert else None) or settings.get("default_deepen_premium_model", "claude-opus-4-6")
 
     return {
         "base_provider": base_provider,
         "base_model": base_model,
         "deepen_provider": deepen_provider,
         "deepen_model": deepen_model,
+        "deepen_premium_provider": deepen_premium_provider,
+        "deepen_premium_model": deepen_premium_model,
     }
 
 

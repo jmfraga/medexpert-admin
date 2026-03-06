@@ -119,12 +119,15 @@ class BotBrain:
     """Clinical consultation engine for Telegram bot queries."""
 
     def __init__(self, provider: str = None, model: str = None,
-                 deepen_provider: str = None, deepen_model: str = None):
+                 deepen_provider: str = None, deepen_model: str = None,
+                 deepen_premium_provider: str = None, deepen_premium_model: str = None):
         settings = db.get_all_settings()
         self.provider = provider or settings.get("default_provider", "groq")
         self.model = model or settings.get("default_model", "openai/gpt-oss-120b")
         self.deepen_provider = deepen_provider or settings.get("default_deepen_provider", "anthropic")
         self.deepen_model = deepen_model or settings.get("default_deepen_model", "claude-sonnet-4-20250514")
+        self.deepen_premium_provider = deepen_premium_provider or settings.get("default_deepen_premium_provider", "anthropic")
+        self.deepen_premium_model = deepen_premium_model or settings.get("default_deepen_premium_model", "claude-opus-4-6")
         self.client = None
         self._init_client()
 
@@ -311,11 +314,16 @@ class BotBrain:
         start = time.time()
 
         # Select model based on tier
-        if tier in ("premium", "basic"):
+        if tier == "premium":
+            deepen_provider = self.deepen_premium_provider
+            deepen_model = self.deepen_premium_model
+            client = self._build_client(deepen_provider)
+            max_tokens = 3000
+        elif tier == "basic":
             deepen_provider = self.deepen_provider
             deepen_model = self.deepen_model
             client = self._build_client(deepen_provider)
-            max_tokens = 3000 if tier == "premium" else 2500
+            max_tokens = 2500
         else:
             # Free: use base model
             deepen_provider = self.provider

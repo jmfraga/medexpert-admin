@@ -103,7 +103,7 @@
                         </select>
                     </div>
                 </div>
-                <h4>Modelo profundizar</h4>
+                <h4>Profundizar — Plan Basico</h4>
                 <div class="llm-row">
                     <div class="form-group">
                         <label>Proveedor</label>
@@ -117,6 +117,24 @@
                     <div class="form-group">
                         <label>Modelo</label>
                         <select id="deepenModel">
+                            <option value="">-- Default global --</option>
+                        </select>
+                    </div>
+                </div>
+                <h4>Profundizar — Plan Premium</h4>
+                <div class="llm-row">
+                    <div class="form-group">
+                        <label>Proveedor</label>
+                        <select id="deepenPremiumProvider" onchange="updateModelOptions('deepenPremiumProvider', 'deepenPremiumModel')">
+                            <option value="">-- Default global --</option>
+                            {% for provider in available_models %}
+                            <option value="{{ provider }}">{{ provider }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Modelo</label>
+                        <select id="deepenPremiumModel">
                             <option value="">-- Default global --</option>
                         </select>
                     </div>
@@ -169,6 +187,7 @@
             document.getElementById('expertPrompt').value = '';
             setProviderAndModel('baseProvider', 'baseModel', '', '');
             setProviderAndModel('deepenProvider', 'deepenModel', '', '');
+            setProviderAndModel('deepenPremiumProvider', 'deepenPremiumModel', '', '');
             document.getElementById('expertModal').classList.add('show');
             document.getElementById('expertName').focus();
         }
@@ -185,13 +204,16 @@
                     const expert = await resp.json();
                     setProviderAndModel('baseProvider', 'baseModel', expert.base_provider || '', expert.base_model || '');
                     setProviderAndModel('deepenProvider', 'deepenModel', expert.deepen_provider || '', expert.deepen_model || '');
+                    setProviderAndModel('deepenPremiumProvider', 'deepenPremiumModel', expert.deepen_premium_provider || '', expert.deepen_premium_model || '');
                 } else {
                     setProviderAndModel('baseProvider', 'baseModel', '', '');
                     setProviderAndModel('deepenProvider', 'deepenModel', '', '');
+                    setProviderAndModel('deepenPremiumProvider', 'deepenPremiumModel', '', '');
                 }
             } catch {
                 setProviderAndModel('baseProvider', 'baseModel', '', '');
                 setProviderAndModel('deepenProvider', 'deepenModel', '', '');
+                setProviderAndModel('deepenPremiumProvider', 'deepenPremiumModel', '', '');
             }
             document.getElementById('expertModal').classList.add('show');
         }
@@ -214,6 +236,8 @@
                 base_model: document.getElementById('baseModel').value,
                 deepen_provider: document.getElementById('deepenProvider').value,
                 deepen_model: document.getElementById('deepenModel').value,
+                deepen_premium_provider: document.getElementById('deepenPremiumProvider').value,
+                deepen_premium_model: document.getElementById('deepenPremiumModel').value,
             };
 
             if (id) {
