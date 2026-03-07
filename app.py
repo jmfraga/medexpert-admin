@@ -258,11 +258,13 @@ async def upload_guideline(expert_id: int, file: UploadFile = File(...)):
         f.write(content)
 
     # Index into RAG
-    rag = get_rag_for_expert(expert["slug"])
-    from load_guidelines import load_file
-    chunks = load_file(str(filepath), rag)
-
-    return JSONResponse({"ok": True, "filename": file.filename, "chunks": chunks})
+    try:
+        rag = get_rag_for_expert(expert["slug"])
+        from load_guidelines import load_file
+        chunks = load_file(str(filepath), rag)
+        return JSONResponse({"ok": True, "filename": file.filename, "chunks": chunks})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Error indexando {file.filename}: {e}"}, status_code=500)
 
 
 @app.delete("/api/experts/{expert_id}/guidelines/{source_name}")

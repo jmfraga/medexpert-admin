@@ -134,41 +134,40 @@ REGISTRO:
 ]
 
 
-def load_pdf(filepath: str, rag: RAGEngine, category: str = ""):
-    """Load a PDF file and chunk it into the RAG store."""
-    try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(filepath)
-        text = ""
-        for page in doc:
-            text += page.get_text() + "\n"
-        doc.close()
+def load_pdf(filepath: str, rag: RAGEngine, category: str = "") -> int:
+    """Load a PDF file and chunk it into the RAG store. Returns chunk count."""
+    import fitz  # PyMuPDF
+    doc = fitz.open(filepath)
+    text = ""
+    for page in doc:
+        text += page.get_text() + "\n"
+    doc.close()
 
-        source = Path(filepath).stem
-        rag.load_text(text, source=source, category=category)
-
-    except ImportError:
-        console.print("[yellow]PyMuPDF not installed. Install with: pip install PyMuPDF[/yellow]")
-    except Exception as e:
-        console.print(f"[red]Error loading {filepath}: {e}[/red]")
+    source = Path(filepath).stem
+    before = rag.get_total_count()
+    rag.load_text(text, source=source, category=category)
+    return rag.get_total_count() - before
 
 
-def load_text_file(filepath: str, rag: RAGEngine, category: str = ""):
-    """Load a text file into the RAG store."""
+def load_text_file(filepath: str, rag: RAGEngine, category: str = "") -> int:
+    """Load a text file into the RAG store. Returns chunk count."""
     text = Path(filepath).read_text(encoding="utf-8")
     source = Path(filepath).stem
+    before = rag.get_total_count()
     rag.load_text(text, source=source, category=category)
+    return rag.get_total_count() - before
 
 
-def load_file(filepath: str, rag: RAGEngine, category: str = ""):
-    """Load a single file (PDF or TXT) into the RAG store."""
+def load_file(filepath: str, rag: RAGEngine, category: str = "") -> int:
+    """Load a single file (PDF or TXT) into the RAG store. Returns chunk count."""
     filepath = str(filepath)
     if filepath.endswith(".pdf"):
-        load_pdf(filepath, rag, category=category)
+        return load_pdf(filepath, rag, category=category)
     elif filepath.endswith((".txt", ".md")):
-        load_text_file(filepath, rag, category=category)
+        return load_text_file(filepath, rag, category=category)
     else:
         console.print(f"[yellow]Unsupported file type: {filepath}[/yellow]")
+        return 0
 
 
 def load_from_directory(guides_dir: str, rag: RAGEngine):
