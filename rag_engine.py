@@ -38,7 +38,7 @@ def _extract_metadata_from_source(source: str, category: str = "") -> dict:
 
     # Detect society/organization
     source_upper = source.upper()
-    for society in ["NCCN", "ESMO", "ASCO", "NCI", "IMSS", "CENETEC", "WHO", "AHA", "ACC", "ESC"]:
+    for society in ["NCCN", "ESMO", "ASCO", "NCI", "IMSS", "CENETEC", "WHO", "AHA", "ACC", "ESC", "CMCM"]:
         if society in source_upper:
             meta["society"] = society
             break

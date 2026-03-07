@@ -46,12 +46,13 @@ PAID_DEEPEN_LIMIT_MONTHLY = 10  # Max deepenings per month for paid tier
 DISCLAIMER_SHOWN_KEY = "disclaimer_shown"
 
 # Source preference constants
-_ALL_SOURCES = ["NCCN", "ESMO", "NCI", "IMSS"]
+_ALL_SOURCES = ["NCCN", "ESMO", "NCI", "IMSS", "CMCM"]
 _SOURCE_LABELS = {
     "NCCN": "NCCN (Natl. Comprehensive Cancer Network)",
     "ESMO": "ESMO (European Society Medical Oncology)",
     "NCI": "NCI/PDQ (National Cancer Institute)",
     "IMSS": "IMSS/GPC (Guias Practica Clinica)",
+    "CMCM": "CMCM (Consenso Mexicano Cancer de Mama)",
 }
 
 # ── Rate Limiting ──

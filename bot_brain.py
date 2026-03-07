@@ -232,7 +232,7 @@ class BotBrain:
             "- Para listas: usa viñetas con • al inicio de cada punto\n"
             "- Para sub-listas: usa guion - con indentacion\n"
             "- Separa secciones con una linea en blanco\n"
-            "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO]\n"
+            "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO], [CMCM 2025]\n"
             "- Menciona datos clinicos relevantes del caso (edad, diagnostico, estadio, etc.)\n"
             "- Da una respuesta completa y detallada\n"
             "- Termina con CONSIDERACIONES ADICIONALES si aplica"
@@ -389,7 +389,7 @@ class BotBrain:
                 "- Usa la consulta original y respuesta previa como contexto\n"
                 "- Incluye niveles de evidencia y grados de recomendacion\n"
                 "- Menciona estudios clinicos clave si los hay en las guias\n"
-                "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO]\n"
+                "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO], [CMCM 2025]\n"
                 "- Responde en español medico profesional\n\n"
                 "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
                 "- PROHIBIDO usar # ## ### para encabezados\n"
@@ -408,7 +408,7 @@ class BotBrain:
                 "- No repitas lo mismo, agrega informacion nueva y mas especifica\n"
                 "- Incluye niveles de evidencia y grados de recomendacion\n"
                 "- Menciona estudios clinicos clave si los hay en las guias\n"
-                "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO]\n"
+                "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO], [CMCM 2025]\n"
                 "- Responde en español medico profesional\n\n"
                 "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
                 "- PROHIBIDO usar # ## ### para encabezados\n"
@@ -981,6 +981,7 @@ _SOCIETY_PRIORITY = {
     "NCI": 2,
     "ASCO": 2,
     "IMSS": 3,
+    "CMCM": 2,
 }
 
 
@@ -1003,6 +1004,8 @@ def _detect_society(source: str) -> str:
         return "ASCO"
     if "IMSS" in s or "GPC" in s or "GER" in s:
         return "IMSS"
+    if "CMCM" in s or "CONSENSO" in s and "MAMA" in s:
+        return "CMCM"
     return ""
 
 
