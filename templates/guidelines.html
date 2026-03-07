@@ -350,9 +350,9 @@
                     });
                     const data = await res.json();
                     if (data.ok) showToast(`${file.name}: ${data.chunks} chunks indexados`);
-                    else showToast(`Error: ${data.error}`, 'error');
+                    else { updateProgress(`Error: ${data.error}`); showToast(`Error: ${data.error}`, 'error'); }
                 } catch (e) {
-                    showToast(`Error: ${e.message}`, 'error');
+                    updateProgress(`Error: ${e.message}`); showToast(`Error: ${e.message}`, 'error');
                 }
             }
             hideProgress();

@@ -210,7 +210,7 @@
             }
             toast.textContent = message;
             document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
+            setTimeout(() => toast.remove(), type === 'error' ? 10000 : 3000);
         }
 
         async function apiCall(url, method = 'GET', body = null) {
