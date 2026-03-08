@@ -265,6 +265,10 @@ async def _send_welcome(update, context, bot_user):
         f"  <b>Exportar PDF</b> — documento con citas para tu expediente\n"
         f"  <b>Evaluar</b> — tu feedback nos ayuda a mejorar\n\n"
 
+        f"<b>Prueba escribiendo o dictando:</b>\n"
+        f"<i>\"Paciente femenina 55 años, carcinoma ductal infiltrante, "
+        f"RE+, HER2-, estadio IIA. ¿Tratamiento adyuvante recomendado?\"</i>\n\n"
+
         f"<b>Comandos disponibles:</b>\n"
         f"  /ayuda — Guía completa y tips\n"
         f"  /estado — Tu cuenta y consultas restantes\n"
