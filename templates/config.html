@@ -422,7 +422,18 @@
                     {% if promo.discount_percent > 0 %}
                         <span class="badge amber">-{{ promo.discount_percent }}%</span>
                     {% elif promo.discount_amount_usd > 0 %}
-                        <span class="badge amber">-${{ promo.discount_amount_usd }}</span>
+                        <span class="badge amber">-${{ promo.discount_amount_usd }} USD</span>
+                    {% endif %}
+                    <span class="badge" style="background:#1e293b; color:#94a3b8; font-size:0.72em;">
+                        {% if promo.applies_to == 'all' %}Todos
+                        {% elif promo.applies_to == 'basic_monthly' %}Basico mes
+                        {% elif promo.applies_to == 'basic_annual' %}Basico anual
+                        {% elif promo.applies_to == 'premium_monthly' %}Premium mes
+                        {% elif promo.applies_to == 'premium_annual' %}Premium anual
+                        {% else %}{{ promo.applies_to }}{% endif %}
+                    </span>
+                    {% if promo.valid_until %}
+                        <span style="font-size:0.72em; color:#475569;">hasta {{ promo.valid_until[:10] }}</span>
                     {% endif %}
                     <span style="font-size:0.78em; color:#475569;">
                         {{ promo.used_count }}/{{ promo.max_uses if promo.max_uses > 0 else 'ilim' }}
@@ -446,15 +457,33 @@
                 </div>
                 <div>
                     <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">Descripcion</label>
-                    <input class="config-input" id="newPromoDesc" placeholder="20% descuento" style="width:180px;">
+                    <input class="config-input" id="newPromoDesc" placeholder="20% primer mes" style="width:180px;">
                 </div>
                 <div>
                     <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">% Desc.</label>
-                    <input class="config-input" type="number" id="newPromoPercent" value="0" style="width:60px;">
+                    <input class="config-input" type="number" id="newPromoPercent" value="0" min="0" max="100" style="width:60px;">
+                </div>
+                <div>
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">$ Desc. USD</label>
+                    <input class="config-input" type="number" id="newPromoAmount" value="0" min="0" step="0.01" style="width:70px;">
+                </div>
+                <div>
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">Aplica a</label>
+                    <select class="config-input" id="newPromoApplies" style="width:120px;">
+                        <option value="all">Todos los planes</option>
+                        <option value="basic_monthly">Basico mensual</option>
+                        <option value="basic_annual">Basico anual</option>
+                        <option value="premium_monthly">Premium mensual</option>
+                        <option value="premium_annual">Premium anual</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">Valido hasta</label>
+                    <input class="config-input" type="date" id="newPromoUntil" style="width:130px;">
                 </div>
                 <div>
                     <label style="font-size:0.72em; color:#475569; display:block; margin-bottom:2px;">Max usos</label>
-                    <input class="config-input" type="number" id="newPromoMaxUses" value="0" style="width:60px;">
+                    <input class="config-input" type="number" id="newPromoMaxUses" value="0" min="0" style="width:60px;" title="0 = ilimitado">
                 </div>
                 <button class="btn success" onclick="createPromo()">Crear</button>
             </div>
@@ -649,12 +678,16 @@
             const code = document.getElementById('newPromoCode').value.trim();
             const description = document.getElementById('newPromoDesc').value.trim();
             const discount_percent = parseInt(document.getElementById('newPromoPercent').value) || 0;
+            const discount_amount_usd = parseFloat(document.getElementById('newPromoAmount').value) || 0;
+            const applies_to = document.getElementById('newPromoApplies').value;
+            const valid_until = document.getElementById('newPromoUntil').value || null;
             const max_uses = parseInt(document.getElementById('newPromoMaxUses').value) || 0;
 
             if (!code) { showToast('Ingresa un codigo', 'error'); return; }
+            if (discount_percent === 0 && discount_amount_usd === 0) { showToast('Ingresa un descuento (% o USD)', 'error'); return; }
 
             const res = await apiCall('/api/promotions', 'POST', {
-                code, description, discount_percent, max_uses
+                code, description, discount_percent, discount_amount_usd, applies_to, valid_until, max_uses
             });
             if (res.ok) {
                 showToast('Promocion creada');

@@ -808,6 +808,15 @@ async def bot_dashboard(request: Request):
     broadcasts = db.get_all_broadcasts(limit=20)
     congresses = db.get_all_congress_events()
     upcoming_congresses = db.get_upcoming_congresses(days_ahead=180)
+    # Import source list from bot.py to keep in sync
+    try:
+        from bot import _ALL_SOURCES, _SOURCE_LABELS
+        all_sources = _ALL_SOURCES
+        source_labels = _SOURCE_LABELS
+    except ImportError:
+        all_sources = ["NCCN", "ESMO", "NCI", "IMSS", "CMCM"]
+        source_labels = {}
+
     return templates.TemplateResponse("bot.html", {
         "request": request,
         "active_page": "bot",
@@ -819,6 +828,8 @@ async def bot_dashboard(request: Request):
         "broadcasts": broadcasts,
         "congresses": congresses,
         "upcoming_congresses": upcoming_congresses,
+        "all_sources": all_sources,
+        "source_labels": source_labels,
     })
 
 

@@ -803,7 +803,7 @@
             const u = usersData[telegramId];
             if (!u) return;
             document.getElementById('userDetailTitle').textContent = u.name;
-            const allSources = ['NCCN', 'ESMO', 'NCI', 'IMSS'];
+            const allSources = {{ all_sources | tojson }};
             const activeSources = u.sources || allSources;
             let srcCheckboxes = allSources.map(s =>
                 `<label style="margin-right:10px;"><input type="checkbox" class="src-cb" value="${s}" ${activeSources.includes(s) ? 'checked' : ''}> ${s}</label>`
@@ -838,7 +838,7 @@
         }
 
         async function saveSources(telegramId) {
-            const allSources = ['NCCN', 'ESMO', 'NCI', 'IMSS'];
+            const allSources = {{ all_sources | tojson }};
             const checked = [...document.querySelectorAll('.src-cb:checked')].map(cb => cb.value);
             if (checked.length === 0) { showToast('Selecciona al menos 1 fuente', 'error'); return; }
             const sources = checked.length === allSources.length ? null : checked;
