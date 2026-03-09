@@ -46,13 +46,14 @@ PAID_DEEPEN_LIMIT_MONTHLY = 10  # Max deepenings per month for paid tier
 DISCLAIMER_SHOWN_KEY = "disclaimer_shown"
 
 # Source preference constants
-_ALL_SOURCES = ["NCCN", "ESMO", "NCI", "IMSS", "CMCM"]
+_ALL_SOURCES = ["NCCN", "ESMO", "NCI", "IMSS", "CMCM", "STGALLEN"]
 _SOURCE_LABELS = {
     "NCCN": "NCCN (Natl. Comprehensive Cancer Network)",
     "ESMO": "ESMO (European Society Medical Oncology)",
     "NCI": "NCI/PDQ (National Cancer Institute)",
     "IMSS": "IMSS/GPC (Guias Practica Clinica)",
     "CMCM": "CMCM (Consenso Mexicano Cancer de Mama)",
+    "STGALLEN": "St. Gallen (International Breast Cancer Consensus)",
 }
 
 # ── Rate Limiting ──
@@ -2528,7 +2529,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_pay_clip, pattern=r"^pay_clip_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_mode_selection, pattern=r"^mode_(caso|pubmed|guias|med)$"))
     app.add_handler(CallbackQueryHandler(handle_mode_menu_callback, pattern=r"^mode_menu$"))
-    app.add_handler(CallbackQueryHandler(handle_source_toggle, pattern=r"^src_(NCCN|ESMO|NCI|IMSS|CMCM)$"))
+    app.add_handler(CallbackQueryHandler(handle_source_toggle, pattern=r"^src_(NCCN|ESMO|NCI|IMSS|CMCM|STGALLEN)$"))
     app.add_handler(CallbackQueryHandler(handle_source_reset, pattern=r"^src_reset$"))
     app.add_handler(CallbackQueryHandler(handle_accept_terms, pattern=r"^accept_terms$"))
 

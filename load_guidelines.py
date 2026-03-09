@@ -13,7 +13,7 @@ import sys
 import os
 from pathlib import Path
 from rich.console import Console
-from clinical_brain import RAGEngine
+from rag_engine import RAGEngine
 
 console = Console()
 

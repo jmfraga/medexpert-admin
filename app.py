@@ -244,7 +244,7 @@ async def guidelines_page(request: Request, expert_id: int):
 
 
 @app.post("/api/experts/{expert_id}/guidelines/upload")
-async def upload_guideline(expert_id: int, file: UploadFile = File(...)):
+async def upload_guideline(expert_id: int, file: UploadFile = File(...), society: str | None = Form(None)):
     expert = db.get_expert_by_id(expert_id)
     if not expert:
         return JSONResponse({"ok": False, "error": "Expert not found"}, status_code=404)
@@ -261,8 +261,8 @@ async def upload_guideline(expert_id: int, file: UploadFile = File(...)):
     try:
         rag = get_rag_for_expert(expert["slug"])
         from load_guidelines import load_file
-        chunks = load_file(str(filepath), rag)
-        return JSONResponse({"ok": True, "filename": file.filename, "chunks": chunks})
+        chunks = load_file(str(filepath), rag, category=society or "")
+        return JSONResponse({"ok": True, "filename": file.filename, "chunks": chunks, "society": society or ""})
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Error indexando {file.filename}: {e}"}, status_code=500)
 

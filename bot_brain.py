@@ -1079,6 +1079,7 @@ _SOCIETY_PRIORITY = {
     "ASCO": 2,
     "IMSS": 3,
     "CMCM": 2,
+    "STGALLEN": 2,
 }
 
 
@@ -1103,6 +1104,8 @@ def _detect_society(source: str) -> str:
         return "IMSS"
     if "CMCM" in s or "CONSENSO" in s and "MAMA" in s:
         return "CMCM"
+    if "STGALLEN" in s or "ST GALLEN" in s or "ST. GALLEN" in s:
+        return "STGALLEN"
     return ""
 
 
