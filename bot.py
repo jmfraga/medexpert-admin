@@ -125,6 +125,238 @@ def get_brain(expert_slug: str = "oncologia") -> BotBrain:
 
 
 # ─────────────────────────────────────────────
+# Directed Search Menu
+# ─────────────────────────────────────────────
+
+async def _show_mode_menu(message, text_prefix: str = ""):
+    """Show the directed search menu with 4 options."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    menu_text = text_prefix + (
+        "<b>¿Qué deseas hacer?</b>\n\n"
+        "📋 <b>Revisar caso clínico</b> — análisis completo con guías + IA\n"
+        "🔬 <b>Buscar en PubMed</b> — literatura científica reciente\n"
+        "📚 <b>Buscar en guías</b> — NCCN, ESMO, CMCM, IMSS directo\n"
+        "💊 <b>Consultar medicamento</b> — dosis, interacciones, evidencia"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 Caso clínico", callback_data="mode_caso"),
+            InlineKeyboardButton("🔬 PubMed", callback_data="mode_pubmed"),
+        ],
+        [
+            InlineKeyboardButton("📚 Guías", callback_data="mode_guias"),
+            InlineKeyboardButton("💊 Medicamento", callback_data="mode_med"),
+        ],
+    ]
+    await message.reply_text(
+        menu_text, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def handle_mode_selection(update, context):
+    """Handle mode selection from the directed search menu."""
+    query = update.callback_query
+    await query.answer()
+
+    mode = query.data  # mode_caso, mode_pubmed, mode_guias, mode_med
+    context.user_data["search_mode"] = mode
+
+    prompts = {
+        "mode_caso": "📋 <b>Caso clínico</b>\n\nEnvía tu caso clínico por texto o audio. Recibirás un análisis completo con referencias de guías clínicas.",
+        "mode_pubmed": "🔬 <b>Búsqueda en PubMed</b>\n\nEscribe tu búsqueda clínica (ej: <i>\"pembrolizumab triple negative breast cancer\"</i>).\n\nBuscaré revisiones sistemáticas, meta-análisis y ensayos clínicos recientes.",
+        "mode_guias": "📚 <b>Búsqueda en guías</b>\n\nEscribe tu consulta (ej: <i>\"tratamiento adyuvante cáncer de mama HER2+\"</i>).\n\nBuscaré directamente en NCCN, ESMO, CMCM e IMSS sin usar IA.",
+        "mode_med": "💊 <b>Consulta de medicamento</b>\n\nEscribe el nombre del medicamento (ej: <i>\"trastuzumab\"</i> o <i>\"Herceptin\"</i>).\n\nBuscaré dosis, indicaciones, interacciones y nivel de evidencia.",
+    }
+    await query.message.reply_text(prompts[mode], parse_mode="HTML")
+
+
+async def _handle_pubmed_search(update, context, query_text: str):
+    """Direct PubMed search without LLM — just literature."""
+    from pubmed import search_pubmed, translate_abstracts, format_papers_telegram
+
+    user = update.effective_user
+    user_plan = db.get_bot_user_plan(user.id)
+    pubmed_max = 5 if user_plan == "premium" else 3
+
+    processing_msg = await update.message.reply_text("🔬 Buscando en PubMed...")
+
+    try:
+        # Build English query via LLM
+        pubmed_query = _build_pubmed_query_for_search(query_text)
+        logger.info(f"PubMed direct search: '{pubmed_query}'")
+
+        papers = search_pubmed(pubmed_query, max_results=pubmed_max)
+
+        if not papers:
+            await processing_msg.edit_text(
+                "No se encontraron artículos relevantes.\n"
+                "Intenta con términos más específicos en inglés.\n\n"
+                "Ejemplo: <i>\"breast cancer HER2 adjuvant therapy\"</i>",
+                parse_mode="HTML",
+            )
+            await _show_mode_menu(update.message, "")
+            return
+
+        papers = translate_abstracts(papers)
+        result_text = format_papers_telegram(papers)
+
+        await processing_msg.delete()
+        await _send_long_message(update, f"🔬 RESULTADOS PUBMED ({len(papers)} artículos):\n{result_text}")
+        await _show_mode_menu(update.message, "")
+
+    except Exception as e:
+        logger.error(f"PubMed direct search error: {e}", exc_info=True)
+        await processing_msg.edit_text("Error buscando en PubMed. Intenta de nuevo.")
+        await _show_mode_menu(update.message, "")
+
+
+async def _handle_guideline_search(update, context, query_text: str):
+    """RAG-only search — no LLM, just show relevant guideline chunks."""
+    from bot_brain import _translate_query_to_english, _expand_synonyms, _detect_society
+    from rag_engine import get_rag_for_expert
+
+    user = update.effective_user
+    specialty = context.bot_data.get("specialty", "oncologia")
+
+    processing_msg = await update.message.reply_text("📚 Buscando en guías clínicas...")
+
+    try:
+        expanded = _expand_synonyms(query_text, specialty)
+        rag = get_rag_for_expert(specialty)
+        source_filter = _build_source_filter(user.id)
+
+        # Bilingual search
+        hits_es = rag.search_detailed(expanded, n_results=10, where=source_filter)
+        english_q = _translate_query_to_english(expanded)
+        hits_en = rag.search_detailed(english_q, n_results=10, where=source_filter) if english_q else []
+
+        # Merge and dedup
+        seen = set()
+        merged = []
+        for hit in hits_es + hits_en:
+            key = (hit.get("source", ""), hit.get("text", "")[:100])
+            if key not in seen:
+                seen.add(key)
+                merged.append(hit)
+
+        # Sort by relevance (distance)
+        merged.sort(key=lambda h: h.get("distance", 999))
+        top_hits = merged[:8]
+
+        if not top_hits:
+            await processing_msg.edit_text("No se encontraron resultados en las guías.")
+            await _show_mode_menu(update.message, "")
+            return
+
+        # Format results
+        lines = []
+        for i, hit in enumerate(top_hits, 1):
+            society = hit.get("society", "") or _detect_society(hit.get("source", ""))
+            source = hit.get("source", "Guía")
+            section = hit.get("section_path", "")
+            label = f"[{society}] {source}" if society else source
+            if section:
+                label += f" > {section}"
+            text_preview = hit["text"][:300]
+            if len(hit["text"]) > 300:
+                text_preview += "..."
+            relevance = round((1 - hit.get("distance", 0)) * 100)
+            lines.append(f"{i}. {label} ({relevance}% relevancia)\n   {text_preview}\n")
+
+        await processing_msg.delete()
+        result = "📚 RESULTADOS EN GUÍAS CLÍNICAS:\n\n" + "\n".join(lines)
+        await _send_long_message(update, result)
+        await _show_mode_menu(update.message, "")
+
+    except Exception as e:
+        logger.error(f"Guideline search error: {e}", exc_info=True)
+        await processing_msg.edit_text("Error buscando en guías. Intenta de nuevo.")
+        await _show_mode_menu(update.message, "")
+
+
+async def _handle_drug_search(update, context, query_text: str):
+    """Drug-focused query: RAG + LLM focused on drug information."""
+    user = update.effective_user
+    specialty = context.bot_data.get("specialty", "oncologia")
+
+    processing_msg = await update.message.reply_text("💊 Buscando información del medicamento...")
+
+    try:
+        brain = get_brain(specialty)
+        source_filter = _build_source_filter(user.id)
+
+        # Enhanced query for drug focus
+        drug_query = f"medicamento {query_text}: dosis, indicaciones, contraindicaciones, interacciones, nivel de evidencia"
+        result = brain.query(drug_query, expert_slug=specialty, source_filter=source_filter)
+
+        # Log as consultation
+        user_plan = db.get_bot_user_plan(user.id)
+        free_used = db.count_bot_free_queries(user.id, specialty)
+        is_free = user_plan == "free" and free_used < FREE_QUERY_LIMIT
+        metadata = extract_clinical_metadata(query_text, result.get("response", ""), specialty)
+        metadata_json = _json.dumps(metadata, ensure_ascii=False)
+
+        consultation_id = db.log_bot_consultation(
+            telegram_id=user.id,
+            specialty=specialty,
+            query_type="text",
+            query_text=anonymize_text(query_text),
+            response_text=result.get("response", ""),
+            response_time_seconds=result.get("processing_time", 0),
+            llm_provider=result.get("provider", ""),
+            llm_model=result.get("model", ""),
+            tokens_input=result.get("token_usage", {}).get("input_tokens", 0),
+            tokens_output=result.get("token_usage", {}).get("output_tokens", 0),
+            rag_chunks_used=result.get("rag_chunks_used", 0),
+            is_free_tier=is_free,
+            citations=result.get("citations", []),
+            clinical_metadata_json=metadata_json,
+        )
+
+        main_text, footer = format_response_for_telegram(result)
+        await processing_msg.delete()
+        await _send_long_message(update, f"💊 {main_text}")
+
+        # Action buttons + new search
+        if footer:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = [
+                [
+                    InlineKeyboardButton("Profundizar", callback_data=f"deepen_{consultation_id}"),
+                    InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{consultation_id}"),
+                ],
+                [
+                    InlineKeyboardButton("📋 Nueva consulta", callback_data="mode_menu"),
+                ],
+            ]
+            await update.message.reply_text(
+                footer, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+    except Exception as e:
+        logger.error(f"Drug search error: {e}", exc_info=True)
+        await processing_msg.edit_text("Error procesando consulta. Intenta de nuevo.")
+        await _show_mode_menu(update.message, "")
+
+
+def _build_pubmed_query_for_search(text: str) -> str:
+    """Build PubMed query from user text — reuses the LLM-based builder from bot_brain."""
+    from bot_brain import _build_pubmed_query
+    return _build_pubmed_query(text)
+
+
+async def handle_mode_menu_callback(update, context):
+    """Handle 'Nueva consulta' button — show mode menu again."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("search_mode", None)
+    await _show_mode_menu(query.message, "")
+
+
+# ─────────────────────────────────────────────
 # Telegram Handlers
 # ─────────────────────────────────────────────
 
@@ -213,10 +445,13 @@ async def handle_accept_terms(update, context):
     user = query.from_user
     db.update_bot_user(user.id, terms_accepted_at=datetime.now().isoformat())
 
-    await query.edit_message_text(
-        "Terminos aceptados. Bienvenido a MedExpert!",
-        parse_mode="HTML",
-    )
+    try:
+        await query.edit_message_text(
+            "Terminos aceptados. Bienvenido a MedExpert!",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass  # Already edited (double tap)
 
     # Now send the full welcome
     bot_user = db.get_bot_user(user.id)
@@ -270,6 +505,7 @@ async def _send_welcome(update, context, bot_user):
         f"RE+, HER2-, estadio IIA. ¿Tratamiento adyuvante recomendado?\"</i>\n\n"
 
         f"<b>Comandos disponibles:</b>\n"
+        f"  /buscar — Caso, PubMed, guías o medicamento\n"
         f"  /ayuda — Guía completa y tips\n"
         f"  /estado — Tu cuenta y consultas restantes\n"
         f"  /suscribir — Planes y precios\n"
@@ -293,7 +529,20 @@ async def _send_welcome(update, context, bot_user):
 
     msg = update.message or update.callback_query.message
     await msg.reply_text(welcome, parse_mode="HTML")
+
+    # Show directed search menu
+    await _show_mode_menu(msg)
+
     logger.info(f"User {user.id} (@{user.username}) started bot ({specialty})")
+
+
+async def cmd_buscar(update, context):
+    """Handle /buscar command — show directed search menu."""
+    user = update.effective_user
+    if not await _check_terms_and_verification(update, user.id):
+        return
+    context.user_data.pop("search_mode", None)
+    await _show_mode_menu(update.message)
 
 
 async def cmd_ayuda(update, context):
@@ -320,6 +569,7 @@ async def cmd_ayuda(update, context):
         "  Las consultas se anonimizan automaticamente\n"
         "  Datos eliminados despues de 30 dias\n\n"
         "<b>Comandos:</b>\n"
+        "  /buscar - Caso, PubMed, guias o medicamento\n"
         "  /start - Reiniciar bot\n"
         "  /ayuda - Esta ayuda\n"
         "  /estado - Estado de cuenta y consultas\n"
@@ -1540,6 +1790,7 @@ async def handle_voice(update, context):
                 ],
                 [
                     InlineKeyboardButton("¿Te sirvió?", callback_data=f"eval_{consultation_id}"),
+                    InlineKeyboardButton("📋 Nueva consulta", callback_data="mode_menu"),
                 ],
             ]
             await update.message.reply_text(
@@ -1642,6 +1893,19 @@ async def handle_text(update, context):
         specialty=specialty,
     )
 
+    # Route based on search mode
+    search_mode = context.user_data.pop("search_mode", None)
+    if search_mode == "mode_pubmed":
+        await _handle_pubmed_search(update, context, text)
+        return
+    elif search_mode == "mode_guias":
+        await _handle_guideline_search(update, context, text)
+        return
+    elif search_mode == "mode_med":
+        await _handle_drug_search(update, context, text)
+        return
+    # mode_caso or no mode → default clinical consultation flow
+
     # Show processing status
     processing_msg = await update.message.reply_text(
         "Buscando en guias clinicas..."
@@ -1704,6 +1968,7 @@ async def handle_text(update, context):
                 ],
                 [
                     InlineKeyboardButton("¿Te sirvió?", callback_data=f"eval_{consultation_id}"),
+                    InlineKeyboardButton("📋 Nueva consulta", callback_data="mode_menu"),
                 ],
             ]
             await update.message.reply_text(
@@ -2169,6 +2434,12 @@ async def handle_pdf_callback(update, context):
 
 async def handle_error(update, context):
     """Handle errors in the bot."""
+    # Ignore harmless "message not modified" errors (double-tap on buttons)
+    err_msg = str(context.error)
+    if "Message is not modified" in err_msg or "message to edit not found" in err_msg.lower():
+        logger.debug(f"Ignored harmless error: {err_msg}")
+        return
+
     logger.error(f"Bot error: {context.error}", exc_info=context.error)
     if update and update.effective_message:
         try:
@@ -2225,6 +2496,7 @@ def main():
     app.add_handler(CommandHandler("verificar", cmd_verificar))
     app.add_handler(CommandHandler("congresos", cmd_congresos))
     app.add_handler(CommandHandler("fuentes", cmd_fuentes))
+    app.add_handler(CommandHandler("buscar", cmd_buscar))
 
     # Photo/document handler for verification flow
     async def handle_photo_or_doc(update, context):
@@ -2254,6 +2526,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_pay_mp, pattern=r"^pay_mp_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_paypal, pattern=r"^pay_paypal_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_clip, pattern=r"^pay_clip_(basic|premium)_(monthly|annual)$"))
+    app.add_handler(CallbackQueryHandler(handle_mode_selection, pattern=r"^mode_(caso|pubmed|guias|med)$"))
+    app.add_handler(CallbackQueryHandler(handle_mode_menu_callback, pattern=r"^mode_menu$"))
     app.add_handler(CallbackQueryHandler(handle_source_toggle, pattern=r"^src_(NCCN|ESMO|NCI|IMSS|CMCM)$"))
     app.add_handler(CallbackQueryHandler(handle_source_reset, pattern=r"^src_reset$"))
     app.add_handler(CallbackQueryHandler(handle_accept_terms, pattern=r"^accept_terms$"))
@@ -2265,6 +2539,7 @@ def main():
     async def post_init(application):
         from telegram import BotCommand
         await application.bot.set_my_commands([
+            BotCommand("buscar", "Caso, PubMed, guias o medicamento"),
             BotCommand("start", "Iniciar el bot"),
             BotCommand("ayuda", "Ver comandos disponibles"),
             BotCommand("estado", "Ver tu plan y consultas"),
