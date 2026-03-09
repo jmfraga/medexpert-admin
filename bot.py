@@ -302,23 +302,35 @@ async def cmd_ayuda(update, context):
         "<b>Ayuda - MedExpert Bot</b>\n\n"
         "<b>Como consultar:</b>\n"
         "  Envia un mensaje de audio o texto con tu caso clinico.\n"
-        "  El bot buscara en guias clinicas y te dara una respuesta con referencias.\n\n"
+        "  El bot buscara en guias clinicas (NCCN, ESMO, CMCM, IMSS) "
+        "y te dara una respuesta con referencias.\n\n"
         "<b>Tips para mejores resultados:</b>\n"
         "  Incluye edad, genero y comorbilidades\n"
         "  Menciona estadio o clasificacion si aplica\n"
-        "  Se especifico en tu pregunta clinica\n\n"
+        "  Se especifico en tu pregunta clinica\n"
+        "  Usa nombres genericos de medicamentos\n\n"
+        "<b>Despues de cada respuesta puedes:</b>\n"
+        "  <b>Profundizar</b> — analisis mas detallado con IA avanzada\n"
+        "    Incluye literatura cientifica reciente de PubMed\n"
+        "    (3 articulos basico / 5 articulos premium)\n"
+        "  <b>Exportar PDF</b> — documento con citas y literatura para tu expediente\n"
+        "  <b>Evaluar</b> — tu feedback nos ayuda a mejorar\n\n"
         "<b>Privacidad:</b>\n"
         "  Tu audio se elimina tras transcribir\n"
-        "  Las consultas se anonimizan\n"
-        "  Datos eliminados automaticamente despues de 30 dias\n\n"
+        "  Las consultas se anonimizan automaticamente\n"
+        "  Datos eliminados despues de 30 dias\n\n"
         "<b>Comandos:</b>\n"
         "  /start - Reiniciar bot\n"
         "  /ayuda - Esta ayuda\n"
         "  /estado - Estado de cuenta y consultas\n"
         "  /suscribir - Planes y suscripciones\n"
+        "  /fuentes - Elegir guias clinicas a consultar\n"
         "  /congresos - Proximos congresos medicos\n"
+        "  /verificar - Verificar titulo profesional\n"
+        "  /codigo - Aplicar codigo promocional\n"
         "  /terminos - Terminos del servicio\n"
-        "  /soporte - Contactar soporte\n\n"
+        "  /soporte - Contactar soporte\n"
+        "  /cancelar - Cancelar accion en curso\n\n"
         "<b>AVISO:</b> Herramienta de apoyo clinico.\n"
         "NO reemplaza el criterio medico profesional."
     )
@@ -1947,6 +1959,11 @@ async def _execute_deepen(update_or_query, context, consultation_id: int,
         )
         metadata_json = _json.dumps(metadata, ensure_ascii=False)
 
+        # Store pubmed papers for PDF generation
+        pubmed_papers = result.get("pubmed_papers", [])
+        if pubmed_papers:
+            context.bot_data[f"pubmed_{consultation_id}"] = pubmed_papers
+
         # Log as consultation
         deepen_id = db.log_bot_consultation(
             telegram_id=user_id,
@@ -2114,12 +2131,19 @@ async def handle_pdf_callback(update, context):
         citations = json.loads(consultation.get("citations_json", "[]"))
     except (json.JSONDecodeError, TypeError):
         citations = []
+    # Get pubmed papers if available (from deepen or parent consultation)
+    parent_id = consultation.get("parent_consultation_id")
+    pubmed_papers = context.bot_data.pop(f"pubmed_{consultation_id}", None)
+    if not pubmed_papers and parent_id:
+        pubmed_papers = context.bot_data.pop(f"pubmed_{parent_id}", None)
+
     pdf_path = generate_consultation_pdf(
         query_text=consultation["query_text"],
         response_text=consultation["response_text"],
         citations=citations,
         specialty=specialty,
         processing_time=consultation.get("response_time_seconds", 0),
+        pubmed_papers=pubmed_papers,
     )
 
     if not pdf_path:
@@ -2230,7 +2254,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_pay_mp, pattern=r"^pay_mp_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_paypal, pattern=r"^pay_paypal_(basic|premium)_(monthly|annual)$"))
     app.add_handler(CallbackQueryHandler(handle_pay_clip, pattern=r"^pay_clip_(basic|premium)_(monthly|annual)$"))
-    app.add_handler(CallbackQueryHandler(handle_source_toggle, pattern=r"^src_(NCCN|ESMO|NCI|IMSS)$"))
+    app.add_handler(CallbackQueryHandler(handle_source_toggle, pattern=r"^src_(NCCN|ESMO|NCI|IMSS|CMCM)$"))
     app.add_handler(CallbackQueryHandler(handle_source_reset, pattern=r"^src_reset$"))
     app.add_handler(CallbackQueryHandler(handle_accept_terms, pattern=r"^accept_terms$"))
 

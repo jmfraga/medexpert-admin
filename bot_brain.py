@@ -453,6 +453,21 @@ class BotBrain:
             logger.info(f"Deepen OK ({deepen_provider}/{deepen_model}) "
                         f"{token_usage['input_tokens']}in/{token_usage['output_tokens']}out")
 
+            # PubMed search for basic/premium tiers
+            pubmed_papers = []
+            if tier in ("basic", "premium"):
+                try:
+                    from pubmed import search_pubmed, translate_abstracts, format_papers_telegram
+                    pubmed_max = 5 if tier == "premium" else 3
+                    search_query = followup_question or original_query
+                    pubmed_papers = search_pubmed(search_query, max_results=pubmed_max)
+                    if pubmed_papers:
+                        pubmed_papers = translate_abstracts(pubmed_papers)
+                        text += "\n\n" + format_papers_telegram(pubmed_papers)
+                        logger.info(f"PubMed: {len(pubmed_papers)} papers added to deepen response")
+                except Exception as e:
+                    logger.warning(f"PubMed search failed (non-blocking): {e}")
+
             elapsed = time.time() - start
             return {
                 "status": "success",
@@ -463,6 +478,7 @@ class BotBrain:
                 "model": deepen_model,
                 "rag_chunks_used": len(merged),
                 "citations": citations,
+                "pubmed_papers": pubmed_papers,
             }
         except Exception as e:
             logger.error(f"Deepen failed ({deepen_provider}/{deepen_model}): {e}")
@@ -624,7 +640,8 @@ def _escape_html(text: str) -> str:
 
 def generate_consultation_pdf(query_text: str, response_text: str,
                                citations: list[str], specialty: str,
-                               processing_time: float = 0) -> str:
+                               processing_time: float = 0,
+                               pubmed_papers: list[dict] = None) -> str:
     """Generate a PDF for a consultation. Returns path to the PDF file."""
     try:
         import fitz  # PyMuPDF
@@ -712,6 +729,38 @@ def generate_consultation_pdf(query_text: str, response_text: str,
             new_page_if_needed(14)
             y = _pdf_text(page, f"  {i}. {cite}", margin_l, y, content_w,
                           fontsize=8, color=(0.35, 0.35, 0.35))
+
+    # ── PubMed Papers ──
+    if pubmed_papers:
+        y += 10
+        new_page_if_needed(30)
+        y = _pdf_section_title(page, "LITERATURA CIENTIFICA RECIENTE", margin_l, y, content_w)
+        for i, paper in enumerate(pubmed_papers, 1):
+            new_page_if_needed(60)
+            # Title
+            y = _pdf_text(page, f"  {i}. {paper['title']}", margin_l, y, content_w,
+                          fontsize=8, fontname="hebo", color=(0.12, 0.25, 0.50))
+            # Authors + year + journal
+            meta_line = f"     {paper['authors']} ({paper['year']})"
+            if paper.get("journal"):
+                meta_line += f" - {paper['journal']}"
+            y = _pdf_text(page, meta_line, margin_l, y, content_w,
+                          fontsize=7, color=(0.4, 0.4, 0.4))
+            # Abstract (truncated)
+            if paper.get("abstract"):
+                abstract = paper.get("abstract_es", paper["abstract"])
+                abstract_short = abstract[:300] + "..." if len(abstract) > 300 else abstract
+                new_page_if_needed(40)
+                y = _pdf_text(page, f"     {abstract_short}", margin_l, y, content_w,
+                              fontsize=7, color=(0.25, 0.25, 0.25))
+            # DOI/PMID
+            if paper.get("doi_url"):
+                y = _pdf_text(page, f"     DOI: {paper['doi_url']}", margin_l, y, content_w,
+                              fontsize=7, color=(0.2, 0.4, 0.7))
+            elif paper.get("pmid"):
+                y = _pdf_text(page, f"     PMID: {paper['pmid']}", margin_l, y, content_w,
+                              fontsize=7, color=(0.2, 0.4, 0.7))
+            y += 4
 
     # ── Disclaimer footer on ALL pages ──
     disclaimer_text = "AVISO: Herramienta de apoyo clinico. NO reemplaza el criterio medico profesional."
