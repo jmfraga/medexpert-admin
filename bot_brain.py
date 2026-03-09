@@ -459,8 +459,10 @@ class BotBrain:
                 try:
                     from pubmed import search_pubmed, translate_abstracts, format_papers_telegram
                     pubmed_max = 5 if tier == "premium" else 3
-                    search_query = followup_question or original_query
-                    pubmed_papers = search_pubmed(search_query, max_results=pubmed_max)
+                    # Use Groq to extract clinical keywords for PubMed
+                    pubmed_query_en = _build_pubmed_query(original_query, followup_question)
+                    logger.info(f"PubMed query: '{pubmed_query_en}'")
+                    pubmed_papers = search_pubmed(pubmed_query_en, max_results=pubmed_max)
                     if pubmed_papers:
                         pubmed_papers = translate_abstracts(pubmed_papers)
                         text += "\n\n" + format_papers_telegram(pubmed_papers)
@@ -970,6 +972,52 @@ _CLINICAL_TRANSLATIONS = {
     "recomendación": "recommendation", "recomendacion": "recommendation",
     "manejo": "management", "seguimiento": "follow-up",
 }
+
+
+def _build_pubmed_query(original_query: str, followup_question: str = None) -> str:
+    """Use Groq LLM to extract clinical keywords and build a PubMed search query."""
+    try:
+        from openai import OpenAI
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        if not groq_key:
+            return ""
+        client = OpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
+
+        clinical_text = original_query
+        if followup_question:
+            clinical_text += f"\nPregunta adicional: {followup_question}"
+
+        # Truncate to avoid sending huge transcriptions
+        if len(clinical_text) > 500:
+            clinical_text = clinical_text[:500]
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            max_tokens=30,
+            messages=[
+                {"role": "system", "content": (
+                    "You extract clinical keywords from Spanish medical queries and return "
+                    "ONLY a short PubMed search query in English (5-10 words). "
+                    "Use standard medical/MeSH terms. No explanations, no quotes. "
+                    "Examples:\n"
+                    "Input: Paciente con cáncer de mama triple negativo estadio II\n"
+                    "Output: triple negative breast cancer stage II treatment\n"
+                    "Input: Carcinoma nasofaríngeo indiferenciado con ganglios cervicales\n"
+                    "Output: undifferentiated nasopharyngeal carcinoma cervical lymph nodes"
+                )},
+                {"role": "user", "content": clinical_text},
+            ],
+            timeout=10.0,
+        )
+        query = response.choices[0].message.content.strip().strip('"\'')
+        logger.info(f"PubMed query built by LLM: '{query}'")
+        return query
+    except Exception as e:
+        logger.warning(f"PubMed query build failed: {e}")
+        # Fallback to trigram translation
+        import re
+        clean = re.sub(r'\[(?:NOMBRE|DIRECCION|TELEFONO|EMAIL|CURP|RFC|NSS|TARJETA)\]', '', original_query)
+        return _translate_query_to_english(clean.strip())
 
 
 def _translate_query_to_english(text: str) -> str:

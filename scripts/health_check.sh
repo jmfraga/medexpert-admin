@@ -13,6 +13,34 @@ if [ -z "$BOT_TOKEN" ] || [ -z "$ADMIN_CHAT_ID" ]; then
 fi
 
 ALERT_FILE="/tmp/medexpert_alert_sent"
+DEPLOY_FLAG="/tmp/medexpert_deploying"
+DEPLOY_NOTIFIED="/tmp/medexpert_deploy_notified"
+
+# If deploying, skip normal checks — just notify once
+if [ -f "$DEPLOY_FLAG" ]; then
+    if [ ! -f "$DEPLOY_NOTIFIED" ]; then
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d chat_id="$ADMIN_CHAT_ID" \
+            -d text="MedExpert se esta actualizando, regresa en unos minutos..." \
+            -d parse_mode="HTML" > /dev/null
+        touch "$DEPLOY_NOTIFIED"
+    fi
+    exit 0
+fi
+
+# If deploy just finished (flag removed but notification was sent), send "back online"
+if [ -f "$DEPLOY_NOTIFIED" ]; then
+    # Verify bot is actually running before announcing
+    if pgrep -f 'python.*bot.py' > /dev/null 2>&1; then
+        curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d chat_id="$ADMIN_CHAT_ID" \
+            -d text="MedExpert esta de vuelta y funcionando." \
+            -d parse_mode="HTML" > /dev/null
+        rm -f "$DEPLOY_NOTIFIED" "$ALERT_FILE"
+    fi
+    exit 0
+fi
+
 ISSUES=""
 
 # Check admin (app.py) via HTTP

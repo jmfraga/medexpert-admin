@@ -1934,11 +1934,11 @@ async def _execute_deepen(update_or_query, context, consultation_id: int,
     extra = " con tu pregunta" if followup_question else ""
     if is_callback:
         processing_msg = await update_or_query.message.reply_text(
-            f"Profundizando{extra} con {model_label}..."
+            f"Profundizando{extra} con {model_label}...\nEsto puede tomar un par de minutos, ten paciencia."
         )
     else:
         processing_msg = await update_or_query.message.reply_text(
-            f"Profundizando{extra} con {model_label}..."
+            f"Profundizando{extra} con {model_label}...\nEsto puede tomar un par de minutos, ten paciencia."
         )
 
     try:

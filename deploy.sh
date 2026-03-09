@@ -71,6 +71,9 @@ ssh "$M1_HOST" "launchctl kickstart -k gui/\$(id -u)/com.medexpert.admin"
 sleep 3
 ssh "$M1_HOST" "tail -3 /tmp/admin.log"
 
+# Create deploy flag (health check will skip alerts, bot shows maintenance message)
+ssh "$M1_HOST" "echo \$(date +%s) > /tmp/medexpert_deploying"
+
 # Restart bot (unload → wait for Telegram to release polling → load)
 echo "Stopping bot..."
 ssh "$M1_HOST" "launchctl unload ~/Library/LaunchAgents/com.medexpert.bot.plist 2>/dev/null; sleep 1; pkill -9 -f 'bot.py' 2>/dev/null || true"
@@ -80,6 +83,9 @@ echo "Starting bot..."
 ssh "$M1_HOST" "> /tmp/bot.log; launchctl load ~/Library/LaunchAgents/com.medexpert.bot.plist"
 sleep 12
 ssh "$M1_HOST" "tail -8 /tmp/bot.log"
+
+# Remove deploy flag
+ssh "$M1_HOST" "rm -f /tmp/medexpert_deploying"
 
 # Verify both running
 echo ""
