@@ -122,8 +122,8 @@ class BotBrain:
                  deepen_provider: str = None, deepen_model: str = None,
                  deepen_premium_provider: str = None, deepen_premium_model: str = None):
         settings = db.get_all_settings()
-        self.provider = provider or settings.get("default_provider", "groq")
-        self.model = model or settings.get("default_model", "openai/gpt-oss-120b")
+        self.provider = provider or settings.get("default_provider", "anthropic")
+        self.model = model or settings.get("default_model", "claude-haiku-4-5-20251001")
         self.deepen_provider = deepen_provider or settings.get("default_deepen_provider", "anthropic")
         self.deepen_model = deepen_model or settings.get("default_deepen_model", "claude-sonnet-4-20250514")
         self.deepen_premium_provider = deepen_premium_provider or settings.get("default_deepen_premium_provider", "anthropic")
@@ -159,7 +159,8 @@ class BotBrain:
             logger.error(f"LLM client init error: {e}")
 
     def query(self, text: str, expert_slug: str,
-              source_filter: dict | None = None) -> dict:
+              source_filter: dict | None = None,
+              tier: str = "free") -> dict:
         """Run a clinical query: RAG search + LLM reasoning.
 
         Returns dict with: status, response, rag_context, provider, model,
@@ -238,8 +239,8 @@ class BotBrain:
             "- Termina con CONSIDERACIONES ADICIONALES si aplica"
         )
 
-        # Call LLM — allow longer responses, Telegram splitting handles length
-        result = self._call_llm(system, user_message, max_tokens=2000)
+        # Call LLM — extended thinking for Haiku gives near-Sonnet quality
+        result = self._call_llm(system, user_message, max_tokens=2000, extended_thinking=True)
 
         # Fallback to Anthropic if primary fails
         if result["status"] == "error" and self.provider != "anthropic":
@@ -276,6 +277,22 @@ class BotBrain:
             if label not in citations:
                 citations.append(label)
         result["citations"] = citations
+
+        # PubMed for premium users on first response
+        pubmed_papers = []
+        if tier == "premium":
+            try:
+                from pubmed import search_pubmed, translate_abstracts, format_papers_telegram
+                pubmed_query_en = _build_pubmed_query(text)
+                logger.info(f"PubMed (1st response): '{pubmed_query_en}'")
+                pubmed_papers = search_pubmed(pubmed_query_en, max_results=5)
+                if pubmed_papers:
+                    pubmed_papers = translate_abstracts(pubmed_papers)
+                    result["response"] += "\n\n" + format_papers_telegram(pubmed_papers)
+                    logger.info(f"PubMed: {len(pubmed_papers)} papers added to first response")
+            except Exception as e:
+                logger.warning(f"PubMed search failed (non-blocking): {e}")
+        result["pubmed_papers"] = pubmed_papers
 
         return result
 
@@ -453,20 +470,18 @@ class BotBrain:
             logger.info(f"Deepen OK ({deepen_provider}/{deepen_model}) "
                         f"{token_usage['input_tokens']}in/{token_usage['output_tokens']}out")
 
-            # PubMed search for basic/premium tiers
+            # PubMed search for premium follow-up questions
             pubmed_papers = []
-            if tier in ("basic", "premium"):
+            if tier == "premium" and followup_question:
                 try:
                     from pubmed import search_pubmed, translate_abstracts, format_papers_telegram
-                    pubmed_max = 5 if tier == "premium" else 3
-                    # Use Groq to extract clinical keywords for PubMed
-                    pubmed_query_en = _build_pubmed_query(original_query, followup_question)
-                    logger.info(f"PubMed query: '{pubmed_query_en}'")
-                    pubmed_papers = search_pubmed(pubmed_query_en, max_results=pubmed_max)
+                    pubmed_query_en = _build_pubmed_query(followup_question)
+                    logger.info(f"PubMed follow-up query: '{pubmed_query_en}'")
+                    pubmed_papers = search_pubmed(pubmed_query_en, max_results=5)
                     if pubmed_papers:
                         pubmed_papers = translate_abstracts(pubmed_papers)
                         text += "\n\n" + format_papers_telegram(pubmed_papers)
-                        logger.info(f"PubMed: {len(pubmed_papers)} papers added to deepen response")
+                        logger.info(f"PubMed: {len(pubmed_papers)} papers added to follow-up response")
                 except Exception as e:
                     logger.warning(f"PubMed search failed (non-blocking): {e}")
 
@@ -496,7 +511,8 @@ class BotBrain:
                 "citations": [],
             }
 
-    def _call_llm(self, system: str, user_message: str, max_tokens: int = 800) -> dict:
+    def _call_llm(self, system: str, user_message: str, max_tokens: int = 800,
+                  extended_thinking: bool = False) -> dict:
         if self.client is None:
             return {
                 "status": "error",
@@ -508,14 +524,35 @@ class BotBrain:
             token_usage = {"input_tokens": 0, "output_tokens": 0}
 
             if self.provider == "anthropic":
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=[{"role": "user", "content": user_message}],
-                    timeout=45.0,
-                )
-                response_text = response.content[0].text
+                # Extended thinking for Haiku — better quality at Haiku cost
+                use_thinking = extended_thinking and "haiku" in self.model
+                if use_thinking:
+                    response = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=max_tokens + 8000,
+                        thinking={
+                            "type": "enabled",
+                            "budget_tokens": 8000,
+                        },
+                        system=system,
+                        messages=[{"role": "user", "content": user_message}],
+                        timeout=90.0,
+                    )
+                    # Extract text block (skip thinking blocks)
+                    response_text = ""
+                    for block in response.content:
+                        if block.type == "text":
+                            response_text = block.text
+                            break
+                else:
+                    response = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=max_tokens,
+                        system=system,
+                        messages=[{"role": "user", "content": user_message}],
+                        timeout=45.0,
+                    )
+                    response_text = response.content[0].text
                 if hasattr(response, "usage") and response.usage:
                     token_usage = {
                         "input_tokens": response.usage.input_tokens,

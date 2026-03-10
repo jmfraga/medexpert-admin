@@ -497,7 +497,7 @@ async def _send_welcome(update, context, bot_user):
         f"  Sé específico en tu pregunta clínica\n\n"
 
         f"<b>Después de cada respuesta puedes:</b>\n"
-        f"  <b>Profundizar</b> — análisis más detallado con IA avanzada\n"
+        f"  <b>Tengo una pregunta</b> — pregunta de seguimiento sobre tu caso\n"
         f"  <b>Exportar PDF</b> — documento con citas para tu expediente\n"
         f"  <b>Evaluar</b> — tu feedback nos ayuda a mejorar\n\n"
 
@@ -560,9 +560,7 @@ async def cmd_ayuda(update, context):
         "  Se especifico en tu pregunta clinica\n"
         "  Usa nombres genericos de medicamentos\n\n"
         "<b>Despues de cada respuesta puedes:</b>\n"
-        "  <b>Profundizar</b> — analisis mas detallado con IA avanzada\n"
-        "    Incluye literatura cientifica reciente de PubMed\n"
-        "    (3 articulos basico / 5 articulos premium)\n"
+        "  <b>Tengo una pregunta</b> — pregunta de seguimiento sobre tu caso\n"
         "  <b>Exportar PDF</b> — documento con citas y literatura para tu expediente\n"
         "  <b>Evaluar</b> — tu feedback nos ayuda a mejorar\n\n"
         "<b>Privacidad:</b>\n"
@@ -840,14 +838,13 @@ async def cmd_suscribir(update, context):
         "<b>Suscripciones MedExpert</b>\n"
         f"{promo_banner}{hint}\n"
         "<b>Plan Basico</b> (precio de lanzamiento)\n"
-        "  Consultas ilimitadas\n"
-        "  Profundizar con GPT-OSS 120B\n"
+        "  Consultas ilimitadas con analisis profundo\n"
+        "  Preguntas de seguimiento\n"
         "  Exportar a PDF\n"
         "  Cancela cuando quieras\n\n"
         "<b>Plan Premium</b> (precio de lanzamiento)\n"
         "  Todo lo del Plan Basico\n"
-        "  Profundizar con Claude Opus 4.6\n"
-        "  Respuestas de maxima calidad clinica\n"
+        "  Literatura cientifica PubMed en cada consulta\n"
         "  Soporte prioritario\n\n"
         "Selecciona plan y periodo:",
         parse_mode="HTML",
@@ -1737,17 +1734,26 @@ async def handle_voice(update, context):
             f"Audio transcrito ({duration}s)\nBuscando en guias clinicas..."
         )
 
-        # Query RAG + LLM (with user source filter)
+        # Determine tier for query
+        user_plan = db.get_bot_user_plan(user.id)
+        tier = user_plan if user_plan in ("basic", "premium") else "free"
+
+        # Update processing message for premium (PubMed search takes longer)
+        if tier == "premium":
+            await processing_msg.edit_text(
+                f"Audio transcrito ({duration}s)\nBuscando en guías clínicas + PubMed..."
+            )
+
+        # Query RAG + LLM (with user source filter and tier)
         brain = get_brain(specialty)
         source_filter = _build_source_filter(user.id)
-        result = brain.query(transcript, expert_slug=specialty, source_filter=source_filter)
+        result = brain.query(transcript, expert_slug=specialty, source_filter=source_filter, tier=tier)
 
         # Extract clinical metadata
         metadata = extract_clinical_metadata(transcript, result.get("response", ""), specialty)
         metadata_json = _json.dumps(metadata, ensure_ascii=False)
 
         # Log consultation
-        user_plan = db.get_bot_user_plan(user.id)
         free_used = db.count_bot_free_queries(user.id, specialty)
         is_free = user_plan == "free" and free_used < FREE_QUERY_LIMIT
         consultation_id = db.log_bot_consultation(
@@ -1766,6 +1772,11 @@ async def handle_voice(update, context):
             citations=result.get("citations", []),
             clinical_metadata_json=metadata_json,
         )
+
+        # Store pubmed papers from first response for PDF
+        pubmed_papers = result.get("pubmed_papers", [])
+        if pubmed_papers:
+            context.bot_data[f"pubmed_{consultation_id}"] = pubmed_papers
 
         # Format and send response
         free_remaining = max(0, FREE_QUERY_LIMIT - free_used - 1)
@@ -1786,7 +1797,7 @@ async def handle_voice(update, context):
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             keyboard = [
                 [
-                    InlineKeyboardButton("Profundizar", callback_data=f"deepen_{consultation_id}"),
+                    InlineKeyboardButton("Tengo una pregunta", callback_data=f"deepen_ask_{consultation_id}"),
                     InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{consultation_id}"),
                 ],
                 [
@@ -1907,25 +1918,27 @@ async def handle_text(update, context):
         return
     # mode_caso or no mode → default clinical consultation flow
 
+    # Determine tier for query
+    user_plan = db.get_bot_user_plan(user.id)
+    tier = user_plan if user_plan in ("basic", "premium") else "free"
+
     # Show processing status
-    processing_msg = await update.message.reply_text(
-        "Buscando en guias clinicas..."
-    )
+    processing_label = "Buscando en guías clínicas + PubMed..." if tier == "premium" else "Buscando en guias clinicas..."
+    processing_msg = await update.message.reply_text(processing_label)
 
     try:
         logger.info(f"Text from {user.id}: '{text[:80]}...'")
 
-        # Query RAG + LLM (with user source filter)
+        # Query RAG + LLM (with user source filter and tier)
         brain = get_brain(specialty)
         source_filter = _build_source_filter(user.id)
-        result = brain.query(text, expert_slug=specialty, source_filter=source_filter)
+        result = brain.query(text, expert_slug=specialty, source_filter=source_filter, tier=tier)
 
         # Extract clinical metadata
         metadata = extract_clinical_metadata(text, result.get("response", ""), specialty)
         metadata_json = _json.dumps(metadata, ensure_ascii=False)
 
         # Log consultation
-        user_plan = db.get_bot_user_plan(user.id)
         free_used = db.count_bot_free_queries(user.id, specialty)
         is_free = user_plan == "free" and free_used < FREE_QUERY_LIMIT
         consultation_id = db.log_bot_consultation(
@@ -1944,6 +1957,11 @@ async def handle_text(update, context):
             citations=result.get("citations", []),
             clinical_metadata_json=metadata_json,
         )
+
+        # Store pubmed papers from first response for PDF
+        pubmed_papers = result.get("pubmed_papers", [])
+        if pubmed_papers:
+            context.bot_data[f"pubmed_{consultation_id}"] = pubmed_papers
 
         # Format and send response
         free_remaining = max(0, FREE_QUERY_LIMIT - free_used - 1)
@@ -1964,7 +1982,7 @@ async def handle_text(update, context):
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             keyboard = [
                 [
-                    InlineKeyboardButton("Profundizar", callback_data=f"deepen_{consultation_id}"),
+                    InlineKeyboardButton("Tengo una pregunta", callback_data=f"deepen_ask_{consultation_id}"),
                     InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{consultation_id}"),
                 ],
                 [
@@ -1997,12 +2015,13 @@ async def _show_limit_reached(update):
         f"Has usado tus {FREE_QUERY_LIMIT} consultas gratis.\n"
         "Para seguir consultando, activa tu suscripcion:\n\n"
         "<b>Plan Basico - $14.99 USD/mes</b>\n"
-        "  Consultas ilimitadas\n"
-        "  Profundizar con GPT-OSS 120B\n"
+        "  Consultas ilimitadas con analisis profundo\n"
+        "  Preguntas de seguimiento\n"
+        "  Exportar a PDF\n"
         "  Cancela cuando quieras\n\n"
         "<b>Plan Premium - $24.99 USD/mes</b>\n"
         "  Todo lo del Plan Basico\n"
-        "  Profundizar con Claude Opus 4.6\n"
+        "  Literatura cientifica PubMed en cada consulta\n"
         "  Soporte prioritario\n\n"
         "Usa /suscribir para activar"
     )
@@ -2033,46 +2052,35 @@ async def _send_long_message(update, text: str, max_len: int = 4000):
 
 
 async def handle_deepen_callback(update, context):
-    """Handle 'Profundizar' button — show choice: general deepen or ask a question."""
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
+    """Handle legacy 'deepen_{id}' callback — redirect to ask flow."""
     query = update.callback_query
     await query.answer()
 
-    data = query.data
-    if not data.startswith("deepen_"):
-        return
-
-    consultation_id = int(data.split("_")[1])
+    consultation_id = int(query.data.split("_")[1])
     consultation = db.get_bot_consultation_by_id(consultation_id)
-
     if not consultation:
-        await query.edit_message_text("Consulta no encontrada.")
+        await query.message.reply_text("Consulta no encontrada.")
         return
 
     user_id = query.from_user.id
     if consultation["telegram_id"] != user_id:
-        await query.edit_message_text("No tienes acceso a esta consulta.")
+        await query.message.reply_text("No tienes acceso a esta consulta.")
         return
 
     if consultation.get("is_deepening"):
         await query.message.reply_text("Esta consulta ya fue profundizada.")
         return
 
-    keyboard = [
-        [
-            InlineKeyboardButton("Profundizar en general", callback_data=f"deepen_go_{consultation_id}"),
-            InlineKeyboardButton("Tengo una pregunta", callback_data=f"deepen_ask_{consultation_id}"),
-        ],
-    ]
+    context.user_data["pending_deepen"] = consultation_id
     await query.message.reply_text(
-        "¿Quieres profundizar en algo especifico?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        "Escribe tu pregunta de seguimiento:\n"
+        "(Ej: ¿Qué efectos adversos tiene el pembrolizumab?)\n\n"
+        "Usa /cancelar para cancelar."
     )
 
 
 async def handle_deepen_ask(update, context):
-    """Handle 'Tengo una pregunta' — store pending state, ask user to type question."""
+    """Handle 'deepen_ask_' callback — ask user for follow-up question."""
     query = update.callback_query
     await query.answer()
 
@@ -2080,6 +2088,15 @@ async def handle_deepen_ask(update, context):
     consultation = db.get_bot_consultation_by_id(consultation_id)
     if not consultation:
         await query.message.reply_text("Consulta no encontrada.")
+        return
+
+    user_id = query.from_user.id
+    if consultation["telegram_id"] != user_id:
+        await query.message.reply_text("No tienes acceso a esta consulta.")
+        return
+
+    if consultation.get("is_deepening"):
+        await query.message.reply_text("Esta consulta ya fue profundizada.")
         return
 
     context.user_data["pending_deepen"] = consultation_id
@@ -2106,10 +2123,10 @@ async def handle_deepen_go(update, context):
 
 async def _execute_deepen(update_or_query, context, consultation_id: int,
                           followup_question: str = None, is_callback: bool = False):
-    """Core deepen logic shared by general deepen and follow-up question deepen.
+    """Execute a follow-up question on a previous consultation.
 
-    Free + basic plan: GPT-OSS 120B via Groq (~3s)
-    Premium plan: configured deepen model (~5-30s)
+    Uses the same model tier as the first response (Haiku+thinking for all tiers).
+    Premium users also get PubMed results in the follow-up.
     """
     consultation = db.get_bot_consultation_by_id(consultation_id)
     if not consultation:
@@ -2145,33 +2162,7 @@ async def _execute_deepen(update_or_query, context, consultation_id: int,
 
     # Determine user tier
     user_plan = db.get_bot_user_plan(user_id)
-
-    if user_plan == "premium":
-        opus_today = db.count_bot_opus_deepenings_today(user_id, specialty)
-        if opus_today >= 3:
-            msg = ("Ya usaste tus 3 profundizaciones premium de hoy.\n"
-                   "Se renuevan manana. Puedes seguir consultando normalmente.")
-            if is_callback:
-                await update_or_query.message.reply_text(msg)
-            else:
-                await update_or_query.message.reply_text(msg)
-            return
-        tier = "premium"
-    elif user_plan == "basic":
-        sonnet_today = db.count_bot_sonnet_deepenings_today(user_id, specialty)
-        if sonnet_today >= 5:
-            msg = ("Ya usaste tus 5 profundizaciones de hoy.\n"
-                   "Se renuevan manana.\n\n"
-                   "Plan Plus ($24.99 USD/mes): profundizar con modelo avanzado\n"
-                   "/suscribir para cambiar de plan")
-            if is_callback:
-                await update_or_query.message.reply_text(msg)
-            else:
-                await update_or_query.message.reply_text(msg)
-            return
-        tier = "basic"
-    else:
-        tier = "free"
+    tier = user_plan if user_plan in ("basic", "premium") else "free"
 
     free_used = db.count_bot_free_queries(user_id, specialty)
     is_free = user_plan == "free"
@@ -2179,7 +2170,7 @@ async def _execute_deepen(update_or_query, context, consultation_id: int,
     if is_free:
         if not db.can_bot_user_query(user_id, specialty, FREE_QUERY_LIMIT):
             msg = ("No tienes consultas gratis restantes.\n"
-                   "Profundizar consume 1 consulta.\n\n"
+                   "La pregunta de seguimiento consume 1 consulta.\n\n"
                    "/suscribir para activar")
             if is_callback:
                 await update_or_query.message.reply_text(msg)
@@ -2187,25 +2178,10 @@ async def _execute_deepen(update_or_query, context, consultation_id: int,
                 await update_or_query.message.reply_text(msg)
             return
 
-    # Build model label from config
-    config = db.get_expert_llm_config(specialty)
-    if tier == "premium":
-        model_label = config["deepen_premium_model"]
-    elif tier == "basic":
-        model_label = config["deepen_model"]
-    else:
-        model_label = config["base_model"]
-
     # Show processing message
-    extra = " con tu pregunta" if followup_question else ""
-    if is_callback:
-        processing_msg = await update_or_query.message.reply_text(
-            f"Profundizando{extra} con {model_label}...\nEsto puede tomar un par de minutos, ten paciencia."
-        )
-    else:
-        processing_msg = await update_or_query.message.reply_text(
-            f"Profundizando{extra} con {model_label}...\nEsto puede tomar un par de minutos, ten paciencia."
-        )
+    processing_msg = await (update_or_query if is_callback else update_or_query).message.reply_text(
+        "Respondiendo tu pregunta...\nEsto puede tomar un par de minutos, ten paciencia."
+    )
 
     try:
         brain = get_brain(specialty)
