@@ -29,9 +29,10 @@ _CARD_RE = re.compile(r'\b(?:\d[-\s]?){13,19}\b')
 
 # Addresses: common patterns (Calle, Av., Col., C.P., etc.)
 _ADDRESS_RE = re.compile(
-    r'(?:(?:calle|avenida|av\.?|blvd\.?|boulevard|col\.?|colonia|c\.?p\.?|codigo postal|'
-    r'manzana|mza\.?|lote|lt\.?|numero|num\.?|no\.?|int\.?|ext\.?|depto\.?|departamento|'
-    r'piso|edificio|entre|y\s+calle)\s*[:#]?\s*[\w\d.,\s#-]{3,40})',
+    r'(?:(?:\bcalle\b|\bavenida\b|\bav\.?\b|\bblvd\.?\b|\bboulevard\b|\bcolonia\b|\bc\.?p\.?\b|\bcodigo postal\b|'
+    r'\bmanzana\b|\bmza\.?\b|\blote\b|\blt\.?\b|\bnumero\b|\bnum\.?\b|'
+    r'\bdepto\.?\b|\bdepartamento\b|'
+    r'\bpiso\b|\bedificio\b|\bentre\s+calle\b|\by\s+calle\b)\s*[:#]?\s*[\w\d.,\s#-]{3,40})',
     re.IGNORECASE
 )
 
