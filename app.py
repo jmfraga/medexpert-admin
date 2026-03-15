@@ -1147,6 +1147,39 @@ async def save_search_settings(request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/settings/search/models")
+async def list_search_models(request: Request):
+    """List available models from Perplexity Synapse API key."""
+    api_key = os.getenv("PERPLEXITY_API_KEY", "")
+    base_url = os.getenv("PERPLEXITY_BASE_URL", "http://100.72.169.113:8800/v1")
+    if not api_key:
+        return JSONResponse({"ok": False, "error": "No Perplexity API key", "models": []})
+    try:
+        import httpx
+        # Try to call Synapse with each known Perplexity model to see which are available
+        known_models = ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"]
+        available = []
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for model_id in known_models:
+                try:
+                    resp = await client.post(
+                        f"{base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        json={"model": model_id, "messages": [{"role": "user", "content": "test"}], "max_tokens": 1},
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        available.append({
+                            "id": model_id,
+                            "name": data.get("model", model_id),
+                        })
+                except Exception:
+                    pass
+        return JSONResponse({"ok": True, "models": available})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e), "models": []})
+
+
 # ─────────────────────────────────────────────
 # Bot Service Control
 # ─────────────────────────────────────────────
@@ -1448,6 +1481,8 @@ async def test_api_connection(request: Request):
             api_key = os.getenv("ANTHROPIC_API_KEY", "")
         elif provider == "synapse":
             api_key = os.getenv("SYNAPSE_API_KEY", "")
+        elif provider == "perplexity":
+            api_key = os.getenv("PERPLEXITY_API_KEY", "")
         else:
             api_key = os.getenv("OPENAI_API_KEY", "")
 

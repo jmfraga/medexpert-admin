@@ -600,19 +600,17 @@
                     </div>
                     <div class="config-row">
                         <span class="config-label" style="min-width:120px;">Modelo rapido</span>
-                        <input type="text" class="config-input" id="perplexityModelFast"
-                            value="{{ search_perplexity_model_fast }}"
-                            placeholder="sonar" style="width:220px;">
+                        <select class="config-select" id="perplexityModelFast" onchange="saveSearchSettings()" style="min-width:220px;">
+                            <option value="">Cargando modelos...</option>
+                        </select>
                     </div>
                     <div class="config-row">
                         <span class="config-label" style="min-width:120px;">Modelo deep</span>
-                        <input type="text" class="config-input" id="perplexityModelDeep"
-                            value="{{ search_perplexity_model_deep }}"
-                            placeholder="sonar-deep-research" style="width:220px;">
+                        <select class="config-select" id="perplexityModelDeep" onchange="saveSearchSettings()" style="min-width:220px;">
+                            <option value="">Cargando modelos...</option>
+                        </select>
                     </div>
-                    <p style="font-size:0.72em; color:#3b82f6; margin-top:4px;">
-                        Los modelos disponibles dependen de la API key generada en Synapse.
-                    </p>
+                    <button class="btn" onclick="loadPerplexityModels()" style="margin-top:6px; padding:3px 10px; font-size:0.75em;">Recargar modelos</button>
                 </div>
             </div>
 
@@ -938,6 +936,38 @@
                 showToast(res.error || 'Error guardando', 'error');
             }
         }
+
+        const SAVED_PERPLEXITY_FAST = '{{ search_perplexity_model_fast }}';
+        const SAVED_PERPLEXITY_DEEP = '{{ search_perplexity_model_deep }}';
+
+        async function loadPerplexityModels() {
+            const fastSel = document.getElementById('perplexityModelFast');
+            const deepSel = document.getElementById('perplexityModelDeep');
+            fastSel.innerHTML = '<option value="">Cargando...</option>';
+            deepSel.innerHTML = '<option value="">Cargando...</option>';
+
+            const res = await apiCall('/api/settings/search/models', 'GET');
+            if (res.ok && res.models && res.models.length > 0) {
+                fastSel.innerHTML = '';
+                deepSel.innerHTML = '';
+                for (const m of res.models) {
+                    const label = m.name !== m.id ? `${m.name} (${m.id})` : m.id;
+                    fastSel.innerHTML += `<option value="${m.id}" ${m.id === SAVED_PERPLEXITY_FAST ? 'selected' : ''}>${label}</option>`;
+                    deepSel.innerHTML += `<option value="${m.id}" ${m.id === SAVED_PERPLEXITY_DEEP ? 'selected' : ''}>${label}</option>`;
+                }
+            } else {
+                fastSel.innerHTML = '<option value="sonar">sonar (default)</option>';
+                deepSel.innerHTML = '<option value="sonar-deep-research">sonar-deep-research (default)</option>';
+            }
+        }
+
+        // Load models on page load if Perplexity is enabled
+        if (document.getElementById('perplexityEnabled').checked) {
+            loadPerplexityModels();
+        }
+        document.getElementById('perplexityEnabled').addEventListener('change', function() {
+            if (this.checked) loadPerplexityModels();
+        });
 
         async function testPerplexity() {
             const resultEl = document.getElementById('testPerplexityResult');
