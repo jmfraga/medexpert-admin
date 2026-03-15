@@ -607,7 +607,7 @@ class BotBrain:
                         {"role": "system", "content": system},
                         {"role": "user", "content": user_message},
                     ],
-                    timeout=45.0,
+                    timeout=90.0,
                 )
                 response_text = response.choices[0].message.content
                 if hasattr(response, "usage") and response.usage:
