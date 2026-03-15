@@ -552,6 +552,88 @@
         </div>
 
         <div class="config-section">
+            <h2>Busqueda de informacion <span class="save-status" id="searchSaveStatus">Guardado</span></h2>
+
+            <!-- PubMed -->
+            <div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #1e2640;">
+                <label class="switch" style="flex-shrink:0;">
+                    <input type="checkbox" id="pubmedEnabled"
+                        {% if search_pubmed_enabled != '0' %}checked{% endif %}
+                        onchange="saveSearchSettings()">
+                    <span class="switch-slider"></span>
+                </label>
+                <div>
+                    <span style="color:#e0e6ed; font-weight:500;">PubMed E-utilities</span>
+                    <span style="font-size:0.72em; color:#475569; display:block;">NCBI API — articulos por MeSH keywords. Gratis.</span>
+                </div>
+            </div>
+
+            <!-- Perplexity via Synapse -->
+            <div style="padding:10px 0; border-bottom:1px solid #1e2640;">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <label class="switch" style="flex-shrink:0;">
+                        <input type="checkbox" id="perplexityEnabled"
+                            {% if search_perplexity_enabled == '1' %}checked{% endif %}
+                            onchange="saveSearchSettings()">
+                        <span class="switch-slider"></span>
+                    </label>
+                    <div>
+                        <span style="color:#60a5fa; font-weight:500;">Perplexity (via Synapse)</span>
+                        <span style="font-size:0.72em; color:#475569; display:block;">Busqueda con IA — Sonar Reasoning (rapido) y Deep Research (exhaustivo, 1/dia premium).</span>
+                    </div>
+                </div>
+                <div id="perplexityConfig" style="margin-top:10px; padding-left:60px; {% if search_perplexity_enabled != '1' %}display:none;{% endif %}">
+                    <div class="key-row">
+                        <span class="config-label" style="min-width:120px; color:#60a5fa;">API Key</span>
+                        <input type="password" class="config-input" id="perplexityKey"
+                            value="{{ perplexity_key_masked }}"
+                            placeholder="syn-...">
+                        <button class="btn" onclick="toggleKeyVisibility('perplexityKey')">Ver</button>
+                        <button class="btn primary" onclick="testPerplexity()">Probar</button>
+                        <span class="test-result" id="testPerplexityResult"></span>
+                    </div>
+                    <div class="key-row">
+                        <span class="config-label" style="min-width:120px; color:#60a5fa;">Base URL</span>
+                        <input type="text" class="config-input" id="perplexityUrl"
+                            value="{{ perplexity_url }}"
+                            placeholder="http://100.72.169.113:8800/v1">
+                    </div>
+                    <div class="config-row">
+                        <span class="config-label" style="min-width:120px;">Modelo rapido</span>
+                        <input type="text" class="config-input" id="perplexityModelFast"
+                            value="{{ search_perplexity_model_fast }}"
+                            placeholder="sonar-reasoning" style="width:220px;">
+                    </div>
+                    <div class="config-row">
+                        <span class="config-label" style="min-width:120px;">Modelo deep</span>
+                        <input type="text" class="config-input" id="perplexityModelDeep"
+                            value="{{ search_perplexity_model_deep }}"
+                            placeholder="sonar-deep-research" style="width:220px;">
+                    </div>
+                    <p style="font-size:0.72em; color:#3b82f6; margin-top:4px;">
+                        Los modelos disponibles dependen de la API key generada en Synapse.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Consensus (future) -->
+            <div style="display:flex; align-items:center; gap:12px; padding:10px 0; opacity:0.4;">
+                <label class="switch" style="flex-shrink:0;">
+                    <input type="checkbox" disabled>
+                    <span class="switch-slider"></span>
+                </label>
+                <div>
+                    <span style="color:#e0e6ed; font-weight:500;">Consensus</span>
+                    <span style="font-size:0.72em; color:#475569; display:block;">API de busqueda academica — proximamente.</span>
+                </div>
+            </div>
+
+            <div style="margin-top:12px;">
+                <button class="btn success" onclick="saveSearchSettings()">Guardar</button>
+            </div>
+        </div>
+
+        <div class="config-section">
             <h2>Servicios</h2>
             <div style="display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #1e2640;">
                 <span style="font-size:1.1em; min-width:24px;">🤖</span>
@@ -830,6 +912,50 @@
                     resultEl.textContent = 'Error: ' + err.message;
                     resultEl.className = 'test-result fail';
                 });
+        }
+
+        // ── Search Providers ──
+        document.getElementById('perplexityEnabled').addEventListener('change', function() {
+            document.getElementById('perplexityConfig').style.display = this.checked ? '' : 'none';
+        });
+
+        async function saveSearchSettings() {
+            const perplexityKey = document.getElementById('perplexityKey').value.trim();
+            const perplexityUrl = document.getElementById('perplexityUrl').value.trim();
+            const res = await apiCall('/api/settings/search', 'POST', {
+                pubmed_enabled: document.getElementById('pubmedEnabled').checked,
+                perplexity_enabled: document.getElementById('perplexityEnabled').checked,
+                perplexity_key: perplexityKey,
+                perplexity_url: perplexityUrl,
+                perplexity_model_fast: document.getElementById('perplexityModelFast').value.trim(),
+                perplexity_model_deep: document.getElementById('perplexityModelDeep').value.trim(),
+            });
+            if (res.ok) {
+                const status = document.getElementById('searchSaveStatus');
+                status.classList.add('show');
+                setTimeout(() => status.classList.remove('show'), 2000);
+            } else {
+                showToast(res.error || 'Error guardando', 'error');
+            }
+        }
+
+        async function testPerplexity() {
+            const resultEl = document.getElementById('testPerplexityResult');
+            const key = document.getElementById('perplexityKey').value.trim();
+            const url = document.getElementById('perplexityUrl').value.trim();
+            const model = document.getElementById('perplexityModelFast').value.trim() || 'sonar-reasoning';
+            resultEl.textContent = 'Probando...';
+            resultEl.className = 'test-result testing';
+            const res = await apiCall('/api/settings/test-api', 'POST', {
+                provider: 'perplexity', api_key: key, base_url: url, model: model,
+            });
+            if (res.ok) {
+                resultEl.textContent = 'OK - ' + res.model + ' (' + res.time + ')';
+                resultEl.className = 'test-result ok';
+            } else {
+                resultEl.textContent = 'Error: ' + (res.error || 'fallo');
+                resultEl.className = 'test-result fail';
+            }
         }
 
         // ── Bot Service Control ──

@@ -1104,6 +1104,50 @@ async def set_payment_mode(request: Request):
 
 
 # ─────────────────────────────────────────────
+# Search Provider Settings
+# ─────────────────────────────────────────────
+
+@app.post("/api/settings/search")
+async def save_search_settings(request: Request):
+    """Save search provider settings (PubMed, Perplexity, etc.)."""
+    data = await request.json()
+
+    db.set_setting("search_pubmed_enabled", "1" if data.get("pubmed_enabled") else "0")
+    db.set_setting("search_perplexity_enabled", "1" if data.get("perplexity_enabled") else "0")
+    db.set_setting("search_perplexity_model_fast", data.get("perplexity_model_fast", "sonar-reasoning"))
+    db.set_setting("search_perplexity_model_deep", data.get("perplexity_model_deep", "sonar-deep-research"))
+
+    # Save Perplexity API key + URL to .env (separate from main Synapse key)
+    perplexity_key = data.get("perplexity_key", "").strip()
+    perplexity_url = data.get("perplexity_url", "").strip()
+
+    if perplexity_key and "*" not in perplexity_key and perplexity_key.startswith("syn-"):
+        env_path = Path(".env")
+        env_lines = env_path.read_text().splitlines() if env_path.exists() else []
+
+        def update_env(lines, key, value):
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith(f"{key}=") or line.startswith(f"# {key}="):
+                    if value:
+                        lines[i] = f"{key}={value}"
+                    found = True
+                    break
+            if not found and value:
+                lines.append(f"{key}={value}")
+            return lines
+
+        env_lines = update_env(env_lines, "PERPLEXITY_API_KEY", perplexity_key)
+        os.environ["PERPLEXITY_API_KEY"] = perplexity_key
+        if perplexity_url:
+            env_lines = update_env(env_lines, "PERPLEXITY_BASE_URL", perplexity_url)
+            os.environ["PERPLEXITY_BASE_URL"] = perplexity_url
+        env_path.write_text("\n".join(env_lines) + "\n")
+
+    return JSONResponse({"ok": True})
+
+
+# ─────────────────────────────────────────────
 # Bot Service Control
 # ─────────────────────────────────────────────
 
@@ -1233,6 +1277,13 @@ async def config_page(request: Request):
         "openai_key_masked": mask_key(openai_raw),
         "synapse_key_masked": mask_key(synapse_raw),
         "synapse_url": synapse_url,
+        # Search providers
+        "search_pubmed_enabled": settings.get("search_pubmed_enabled", "1"),
+        "search_perplexity_enabled": settings.get("search_perplexity_enabled", "0"),
+        "perplexity_key_masked": mask_key(os.getenv("PERPLEXITY_API_KEY", "")),
+        "perplexity_url": os.getenv("PERPLEXITY_BASE_URL", "http://100.72.169.113:8800/v1"),
+        "search_perplexity_model_fast": settings.get("search_perplexity_model_fast", "sonar-reasoning"),
+        "search_perplexity_model_deep": settings.get("search_perplexity_model_deep", "sonar-deep-research"),
         "default_provider": default_provider,
         "default_model": default_model,
         "fallback1_provider": fallback1_provider,
@@ -1452,6 +1503,29 @@ async def test_api_connection(request: Request):
             return JSONResponse({
                 "ok": True,
                 "model": f"Synapse auto → {model_used}",
+                "response": resp.choices[0].message.content,
+                "time": f"{elapsed:.1f}s",
+            })
+        elif provider == "perplexity":
+            from openai import OpenAI
+            base_url = data.get("base_url") or os.getenv("PERPLEXITY_BASE_URL", "http://100.72.169.113:8800/v1")
+            test_model = data.get("model") or "sonar-reasoning"
+            if not api_key or "*" in api_key:
+                api_key = os.getenv("PERPLEXITY_API_KEY", "")
+            if not api_key:
+                return JSONResponse({"ok": False, "error": "No API key de Perplexity"})
+            client = OpenAI(base_url=base_url, api_key=api_key)
+            resp = client.chat.completions.create(
+                model=test_model,
+                max_tokens=30,
+                messages=[{"role": "user", "content": "Responde solo 'OK'"}],
+                timeout=30.0,
+            )
+            elapsed = _time.time() - start
+            model_used = getattr(resp, "model", test_model) or test_model
+            return JSONResponse({
+                "ok": True,
+                "model": model_used,
                 "response": resp.choices[0].message.content,
                 "time": f"{elapsed:.1f}s",
             })
