@@ -791,6 +791,11 @@ AVAILABLE_MODELS = {
         {"id": "openai/gpt-oss-120b", "name": "GPT-OSS 120B"},
         {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B"},
     ],
+    "synapse": [
+        {"id": "auto", "name": "Auto (ruteo inteligente)"},
+        {"id": "qwen3.5-35b-a3b", "name": "Qwen 3.5 35B-A3B (local)"},
+        {"id": "gpt-oss-20b", "name": "GPT-OSS 20B (local)"},
+    ],
 }
 
 
@@ -1104,6 +1109,7 @@ async def config_page(request: Request):
     settings = db.get_all_settings()
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY"))
     has_openai = bool(os.getenv("OPENAI_API_KEY"))
+    has_synapse = bool(os.getenv("SYNAPSE_API_KEY"))
     default_provider = settings.get("default_provider", "anthropic" if has_anthropic else "openai")
     default_model = settings.get("default_model", "claude-sonnet-4-20250514" if has_anthropic else "gpt-4.1")
     # Build available models based on configured keys
@@ -1112,6 +1118,8 @@ async def config_page(request: Request):
         models["anthropic"] = AVAILABLE_MODELS["anthropic"]
     if has_openai:
         models["openai"] = AVAILABLE_MODELS["openai"]
+    if has_synapse:
+        models["synapse"] = AVAILABLE_MODELS["synapse"]
     # Mask keys for display (show first 7 + last 4 chars)
     def mask_key(key: str) -> str:
         if not key or len(key) < 12:
@@ -1120,6 +1128,8 @@ async def config_page(request: Request):
 
     anthropic_raw = os.getenv("ANTHROPIC_API_KEY", "")
     openai_raw = os.getenv("OPENAI_API_KEY", "")
+    synapse_raw = os.getenv("SYNAPSE_API_KEY", "")
+    synapse_url = os.getenv("SYNAPSE_BASE_URL", "http://100.72.169.113:8800/v1")
 
     # Pricing & promotions
     pricing_plans = db.get_all_pricing_plans()
@@ -1135,8 +1145,11 @@ async def config_page(request: Request):
         "api_keys": api_keys,
         "anthropic_key": has_anthropic,
         "openai_key": has_openai,
+        "synapse_key": has_synapse,
         "anthropic_key_masked": mask_key(anthropic_raw),
         "openai_key_masked": mask_key(openai_raw),
+        "synapse_key_masked": mask_key(synapse_raw),
+        "synapse_url": synapse_url,
         "default_provider": default_provider,
         "default_model": default_model,
         "available_models": models,
@@ -1227,12 +1240,16 @@ async def save_api_keys(request: Request):
     data = await request.json()
     anthropic_key = data.get("anthropic_key", "").strip()
     openai_key = data.get("openai_key", "").strip()
+    synapse_key = data.get("synapse_key", "").strip()
+    synapse_url = data.get("synapse_url", "").strip()
 
     # Skip masked values (don't overwrite with asterisks)
     if anthropic_key and not anthropic_key.startswith("sk-"):
         anthropic_key = ""
     if openai_key and not openai_key.startswith("sk-"):
         openai_key = ""
+    if synapse_key and not synapse_key.startswith("syn-"):
+        synapse_key = ""
 
     # Read existing .env
     env_path = Path(".env")
@@ -1259,6 +1276,12 @@ async def save_api_keys(request: Request):
     if openai_key:
         env_lines = update_env(env_lines, "OPENAI_API_KEY", openai_key)
         os.environ["OPENAI_API_KEY"] = openai_key
+    if synapse_key:
+        env_lines = update_env(env_lines, "SYNAPSE_API_KEY", synapse_key)
+        os.environ["SYNAPSE_API_KEY"] = synapse_key
+    if synapse_url:
+        env_lines = update_env(env_lines, "SYNAPSE_BASE_URL", synapse_url)
+        os.environ["SYNAPSE_BASE_URL"] = synapse_url
 
     env_path.write_text("\n".join(env_lines) + "\n")
     return JSONResponse({"ok": True})
@@ -1274,9 +1297,12 @@ async def test_api_connection(request: Request):
 
     # Use provided key or fall back to env
     if not api_key or "*" in api_key:
-        api_key = os.getenv(
-            "ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY", ""
-        )
+        if provider == "anthropic":
+            api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        elif provider == "synapse":
+            api_key = os.getenv("SYNAPSE_API_KEY", "")
+        else:
+            api_key = os.getenv("OPENAI_API_KEY", "")
 
     if not api_key:
         return JSONResponse({"ok": False, "error": "No API key"})
@@ -1312,6 +1338,24 @@ async def test_api_connection(request: Request):
             return JSONResponse({
                 "ok": True,
                 "model": "gpt-4.1-nano",
+                "response": resp.choices[0].message.content,
+                "time": f"{elapsed:.1f}s",
+            })
+        elif provider == "synapse":
+            from openai import OpenAI
+            synapse_url = os.getenv("SYNAPSE_BASE_URL", "http://100.72.169.113:8800/v1")
+            client = OpenAI(base_url=synapse_url, api_key=api_key)
+            resp = client.chat.completions.create(
+                model="auto",
+                max_tokens=10,
+                messages=[{"role": "user", "content": "Responde solo 'OK'"}],
+                timeout=15.0,
+            )
+            elapsed = _time.time() - start
+            model_used = getattr(resp, "model", "auto") or "auto"
+            return JSONResponse({
+                "ok": True,
+                "model": f"Synapse auto → {model_used}",
                 "response": resp.choices[0].message.content,
                 "time": f"{elapsed:.1f}s",
             })

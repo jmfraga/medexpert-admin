@@ -23,10 +23,22 @@ Fecha: {current_date}
 INSTRUCCIONES:
 - Responde en espanol medico profesional
 - Basa tus respuestas en las guias clinicas proporcionadas
-- Cita las fuentes cuando sea posible (ej: [NCCN], [ESMO])
+- Cita las fuentes cuando sea posible (ej: [NCCN 2024], [ESMO])
 - Si no tienes informacion suficiente, indicalo claramente
 - NO inventes datos clinicos ni estadisticas
 - Recuerda: eres una herramienta de APOYO, no reemplazas el criterio medico
+
+ESTRUCTURA DE RESPUESTA (formato SAER - obligatorio):
+Usa la nemotecnia SAER para estructurar TODAS tus respuestas:
+
+1. SITUACION: Resumen breve del caso clinico o pregunta del medico
+2. ANTECEDENTES: Contexto clinico relevante (epidemiologia, fisiopatologia, factores de riesgo)
+3. EVALUACION: Analisis basado en las guias clinicas con niveles de evidencia
+4. RECOMENDACIONES: Conducta sugerida, opciones terapeuticas, seguimiento
+
+Al final incluye:
+- GUIAS CONSULTADAS: lista de guias citadas con año
+- Si aplica: REFERENCIAS PUBMED
 
 GUIAS CLINICAS DISPONIBLES:
 {rag_context}"""
@@ -148,6 +160,11 @@ class BotBrain:
                     api_key=os.getenv("GROQ_API_KEY"),
                 )
                 logger.info(f"Groq ready (model: {self.model})")
+            elif self.provider == "synapse":
+                from openai import OpenAI
+                synapse_url = os.getenv("SYNAPSE_BASE_URL", "http://100.72.169.113:8800/v1")
+                self.client = OpenAI(base_url=synapse_url, api_key=os.getenv("SYNAPSE_API_KEY"))
+                logger.info(f"Synapse ready (model: {self.model}, url: {synapse_url})")
             elif self.provider == "ollama":
                 from openai import OpenAI
                 ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -219,24 +236,31 @@ class BotBrain:
         except (KeyError, IndexError):
             system = system_prompt + f"\n\nFecha: {datetime.now().strftime('%Y-%m-%d')}\n\nGUIAS CLINICAS:\n{rag_context}"
 
-        # User message — instruct for Telegram-friendly formatting
+        # User message — SAER structure + Telegram-friendly formatting
         user_message = (
             "Consulta clinica:\n\n"
             f"{text}\n\n"
-            "FORMATO DE RESPUESTA (OBLIGATORIO - es para un chat de Telegram, texto plano):\n"
+            "ESTRUCTURA SAER (OBLIGATORIO):\n"
+            "Organiza tu respuesta asi:\n\n"
+            "SITUACION:\n"
+            "Resumen del caso o pregunta con datos clinicos relevantes (edad, diagnostico, estadio, etc.)\n\n"
+            "ANTECEDENTES:\n"
+            "Contexto clinico: epidemiologia, fisiopatologia, clasificacion, factores pronosticos relevantes\n\n"
+            "EVALUACION:\n"
+            "Analisis basado en guias clinicas. Incluye niveles de evidencia y grados de recomendacion. "
+            "Cita fuentes: [NCCN 2024], [ESMO], [CMCM 2025]\n\n"
+            "RECOMENDACIONES:\n"
+            "Conducta sugerida: opciones terapeuticas, dosis si aplica, seguimiento, referencia a especialista\n\n"
+            "GUIAS CONSULTADAS:\n"
+            "Lista de guias citadas con año\n\n"
+            "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
             "- PROHIBIDO usar # ## ### para encabezados\n"
             "- PROHIBIDO usar tablas con | o ---\n"
-            "- PROHIBIDO usar ** para negritas\n"
-            "- PROHIBIDO usar markdown de cualquier tipo\n"
+            "- PROHIBIDO usar ** para negritas ni ningun markdown\n"
             "- Para titulos de seccion: escribe en MAYUSCULAS seguido de dos puntos\n"
-            "  Ejemplo: RECOMENDACION TERAPEUTICA:\n"
             "- Para listas: usa viñetas con • al inicio de cada punto\n"
             "- Para sub-listas: usa guion - con indentacion\n"
-            "- Separa secciones con una linea en blanco\n"
-            "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO], [CMCM 2025]\n"
-            "- Menciona datos clinicos relevantes del caso (edad, diagnostico, estadio, etc.)\n"
-            "- Da una respuesta completa y detallada\n"
-            "- Termina con CONSIDERACIONES ADICIONALES si aplica"
+            "- Separa secciones con una linea en blanco"
         )
 
         # Call LLM — extended thinking for Haiku gives near-Sonnet quality
@@ -310,6 +334,10 @@ class BotBrain:
         elif provider == "openai":
             from openai import OpenAI
             return OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        elif provider == "synapse":
+            from openai import OpenAI
+            synapse_url = os.getenv("SYNAPSE_BASE_URL", "http://100.72.169.113:8800/v1")
+            return OpenAI(base_url=synapse_url, api_key=os.getenv("SYNAPSE_API_KEY"))
         elif provider == "ollama":
             from openai import OpenAI
             ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -386,13 +414,17 @@ class BotBrain:
             "Eres MedExpert, asistente clinico especializado de alto nivel.\n"
             f"Fecha: {datetime.now().strftime('%Y-%m-%d')}\n\n"
             "Un medico solicita PROFUNDIZAR en una respuesta clinica previa.\n"
-            "Tu rol es expandir significativamente con:\n"
-            "- Mayor detalle en mecanismos, evidencia y niveles de recomendacion\n"
-            "- Dosis especificas, esquemas y duracion de tratamiento\n"
-            "- Efectos adversos relevantes y su manejo\n"
-            "- Alternativas terapeuticas y criterios de seleccion\n"
-            "- Citas especificas de guias [NCCN 2024], [ESMO], etc.\n"
-            "- Datos de supervivencia y eficacia cuando esten disponibles\n\n"
+            "Tu rol es expandir significativamente usando la estructura SAER:\n\n"
+            "ESTRUCTURA SAER para profundizacion:\n"
+            "- SITUACION: Contexto actualizado del caso\n"
+            "- ANTECEDENTES: Mecanismos de accion, farmacologia, estudios pivotales\n"
+            "- EVALUACION: Evidencia detallada con niveles (IA, IB, IIA, etc.), "
+            "dosis especificas, esquemas, duracion, efectos adversos y su manejo\n"
+            "- RECOMENDACIONES: Algoritmo terapeutico, alternativas, criterios de seleccion, "
+            "datos de supervivencia y eficacia\n\n"
+            "Al final incluye:\n"
+            "- GUIAS CONSULTADAS: con año y seccion especifica\n"
+            "- Citas especificas: [NCCN 2024], [ESMO], etc.\n\n"
             f"GUIAS CLINICAS DISPONIBLES:\n{rag_context}"
         )
 
@@ -404,10 +436,12 @@ class BotBrain:
                 "INSTRUCCIONES:\n"
                 "- Responde enfocandote en la pregunta especifica del medico\n"
                 "- Usa la consulta original y respuesta previa como contexto\n"
+                "- Estructura con SAER: SITUACION, ANTECEDENTES, EVALUACION, RECOMENDACIONES\n"
                 "- Incluye niveles de evidencia y grados de recomendacion\n"
                 "- Menciona estudios clinicos clave si los hay en las guias\n"
                 "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO], [CMCM 2025]\n"
-                "- Responde en español medico profesional\n\n"
+                "- Responde en español medico profesional\n"
+                "- Al final: GUIAS CONSULTADAS con año\n\n"
                 "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
                 "- PROHIBIDO usar # ## ### para encabezados\n"
                 "- PROHIBIDO usar tablas con | o ---\n"
@@ -423,10 +457,15 @@ class BotBrain:
                 "INSTRUCCIONES:\n"
                 "- Profundiza y expande la respuesta anterior con mas detalle clinico\n"
                 "- No repitas lo mismo, agrega informacion nueva y mas especifica\n"
+                "- Estructura con SAER: SITUACION, ANTECEDENTES, EVALUACION, RECOMENDACIONES\n"
                 "- Incluye niveles de evidencia y grados de recomendacion\n"
+                "- Incluye dosis especificas, esquemas y duracion de tratamiento\n"
+                "- Efectos adversos relevantes y su manejo\n"
+                "- Alternativas terapeuticas y criterios de seleccion\n"
                 "- Menciona estudios clinicos clave si los hay en las guias\n"
                 "- Cita fuentes entre corchetes: [NCCN 2024], [ESMO], [CMCM 2025]\n"
-                "- Responde en español medico profesional\n\n"
+                "- Responde en español medico profesional\n"
+                "- Al final: GUIAS CONSULTADAS con año y seccion especifica\n\n"
                 "FORMATO (OBLIGATORIO - texto plano para Telegram):\n"
                 "- PROHIBIDO usar # ## ### para encabezados\n"
                 "- PROHIBIDO usar tablas con | o ---\n"
