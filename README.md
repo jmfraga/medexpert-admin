@@ -33,7 +33,9 @@ Part of the [MedExpert](https://github.com/jmfraga/MedExpert) ecosystem:
 - **License generation** — Create license.json and config.json with API key injection
 - **Distribution** — Push ChromaDB, config, glossary, and licenses via rsync/scp over Tailscale
   - KB versioning with SHA256 manifests, keeps latest 3 versions
-- **LLM configuration** — Set default provider and model for client licenses, per-expert overrides
+- **LLM configuration** — Set default provider/model + configurable fallback chain (Default → Fallback 1 → Fallback 2), per-expert overrides
+- **Search providers** — Toggle PubMed and/or Perplexity (via Synapse) for literature search, with model selection
+- **Bot service control** — Start/stop Telegram bot from admin UI, live status with PID and log tail
 - **Dashboard** — Overview of experts, clients, guidelines, and distribution status
 - **Analytics dashboard** — Chart.js visualizations for query patterns, guideline usage, API costs, clinical stats, feedback analysis, and CSV export
 - **Admin authentication** — Cookie-based login with role-based access (admin/soporte)
@@ -69,11 +71,18 @@ Additional models available for admin/client configuration:
 
 **[Synapse Router](https://github.com/jmfraga/synapse-router)** — OpenAI-compatible intelligent routing gateway running on local hardware (M4 Pro). Model `auto` automatically selects the optimal model based on query intent. Supports 391 models across 7 providers (Ollama, Groq, NVIDIA NIM, Anthropic, OpenAI, Gemini, Perplexity). Configurable from Admin > Configuración.
 
+**Fallback chain:** Configurable Default → Fallback 1 → Fallback 2 from admin UI. If the default provider fails, the system automatically tries each fallback in order.
+
 **Response format:** All responses use the SAER/SBAR clinical communication standard:
 - **S**ituación — Clinical context summary
 - **A**ntecedentes — Relevant background (epidemiology, risk factors)
 - **E**valuación — Evidence-based analysis with guideline citations
 - **R**ecomendaciones — Therapeutic options, dosing, follow-up
+
+**Literature search:** Unified `_search_literature()` engine with configurable providers (toggle from admin):
+- **PubMed** — E-utilities search for systematic reviews, meta-analyses, RCTs (free)
+- **Perplexity** — AI-powered search via Synapse (Sonar models), configurable fast/deep models
+- References shown as clickable links in PDF, Telegram shows download note
 
 ## Quick Start
 
@@ -179,8 +188,10 @@ Environment variables (`.env`):
 | `ANTHROPIC_API_KEY` | — | Anthropic API key (premium deepen) |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `GROQ_API_KEY` | — | Groq API key (base + deepen models) |
-| `SYNAPSE_API_KEY` | — | [Synapse](https://github.com/jmfraga/synapse-router) API key (`syn-...`) |
+| `SYNAPSE_API_KEY` | — | [Synapse](https://github.com/jmfraga/synapse-router) API key (`syn-...`) for LLM routing |
 | `SYNAPSE_BASE_URL` | `http://100.72.169.113:8800/v1` | Synapse router base URL |
+| `PERPLEXITY_API_KEY` | — | Synapse API key for Perplexity search models (`syn-...`) |
+| `PERPLEXITY_BASE_URL` | `http://100.72.169.113:8800/v1` | Synapse base URL for Perplexity |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from BotFather |
 | `BOT_SPECIALTY` | `oncologia` | Default specialty for the bot |
 | `BOT_WHISPER_MODEL` | `medium` | Whisper model for voice messages |
