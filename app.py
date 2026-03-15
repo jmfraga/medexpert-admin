@@ -1109,7 +1109,6 @@ async def config_page(request: Request):
     settings = db.get_all_settings()
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY"))
     has_openai = bool(os.getenv("OPENAI_API_KEY"))
-    has_groq = bool(os.getenv("GROQ_API_KEY"))
     has_synapse = bool(os.getenv("SYNAPSE_API_KEY"))
     default_provider = settings.get("default_provider", "synapse" if has_synapse else ("anthropic" if has_anthropic else "openai"))
     default_model = settings.get("default_model", "auto" if has_synapse else ("claude-sonnet-4-20250514" if has_anthropic else "gpt-4.1"))
@@ -1126,8 +1125,7 @@ async def config_page(request: Request):
         models["anthropic"] = AVAILABLE_MODELS["anthropic"]
     if has_openai:
         models["openai"] = AVAILABLE_MODELS["openai"]
-    if has_groq:
-        models["groq"] = AVAILABLE_MODELS["groq"]
+    # Groq is used internally for base tier, not shown as selectable default
     # Mask keys for display (show first 7 + last 4 chars)
     def mask_key(key: str) -> str:
         if not key or len(key) < 12:
@@ -1264,11 +1262,12 @@ async def save_api_keys(request: Request):
     synapse_url = data.get("synapse_url", "").strip()
 
     # Skip masked values (don't overwrite with asterisks)
-    if anthropic_key and not anthropic_key.startswith("sk-"):
+    # Masked keys contain '*' — never write those to .env
+    if anthropic_key and ("*" in anthropic_key or not anthropic_key.startswith("sk-")):
         anthropic_key = ""
-    if openai_key and not openai_key.startswith("sk-"):
+    if openai_key and ("*" in openai_key or not openai_key.startswith("sk-")):
         openai_key = ""
-    if synapse_key and not synapse_key.startswith("syn-"):
+    if synapse_key and ("*" in synapse_key or not synapse_key.startswith("syn-")):
         synapse_key = ""
 
     # Read existing .env
