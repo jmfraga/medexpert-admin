@@ -1103,6 +1103,83 @@ async def set_payment_mode(request: Request):
     return JSONResponse({"ok": True, "mode": mode})
 
 
+# ─────────────────────────────────────────────
+# Bot Service Control
+# ─────────────────────────────────────────────
+
+BOT_PLIST = "com.medexpert.bot"
+BOT_PLIST_PATH = os.path.expanduser("~/Library/LaunchAgents/com.medexpert.bot.plist")
+
+
+@app.get("/api/bot/service/status")
+async def bot_service_status(request: Request):
+    """Check if the bot process is running."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["launchctl", "list"], capture_output=True, text=True, timeout=5,
+        )
+        running = BOT_PLIST in result.stdout
+        # Also check for PID
+        pid = None
+        for line in result.stdout.splitlines():
+            if BOT_PLIST in line:
+                parts = line.split()
+                if parts[0] != "-":
+                    pid = int(parts[0])
+                break
+        # Get last few log lines
+        log_lines = []
+        try:
+            with open("/tmp/bot.log", "r") as f:
+                log_lines = f.readlines()[-5:]
+        except Exception:
+            pass
+        return JSONResponse({
+            "ok": True, "running": running, "pid": pid,
+            "log": "".join(log_lines).strip(),
+        })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
+@app.post("/api/bot/service/stop")
+async def bot_service_stop(request: Request):
+    """Stop the bot service."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["launchctl", "unload", BOT_PLIST_PATH],
+            capture_output=True, text=True, timeout=10,
+        )
+        subprocess.run(
+            ["pkill", "-9", "-f", "bot.py"],
+            capture_output=True, text=True, timeout=5,
+        )
+        logger.info("Bot service stopped via admin")
+        return JSONResponse({"ok": True, "status": "stopped"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
+@app.post("/api/bot/service/start")
+async def bot_service_start(request: Request):
+    """Start the bot service."""
+    import subprocess
+    try:
+        # Clear log for fresh start
+        with open("/tmp/bot.log", "w") as f:
+            f.write("")
+        subprocess.run(
+            ["launchctl", "load", BOT_PLIST_PATH],
+            capture_output=True, text=True, timeout=10,
+        )
+        logger.info("Bot service started via admin")
+        return JSONResponse({"ok": True, "status": "started"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
 @app.get("/config", response_class=HTMLResponse)
 async def config_page(request: Request):
     api_keys = db.get_api_keys()
