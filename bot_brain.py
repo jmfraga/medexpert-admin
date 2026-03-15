@@ -137,9 +137,9 @@ class BotBrain:
         self.provider = provider or settings.get("default_provider", "anthropic")
         self.model = model or settings.get("default_model", "claude-haiku-4-5-20251001")
         self.deepen_provider = deepen_provider or settings.get("default_deepen_provider", "synapse")
-        self.deepen_model = deepen_model or settings.get("default_deepen_model", "auto")
+        self.deepen_model = deepen_model or settings.get("default_deepen_model", "MedExpert-Onco")
         self.deepen_premium_provider = deepen_premium_provider or settings.get("default_deepen_premium_provider", "synapse")
-        self.deepen_premium_model = deepen_premium_model or settings.get("default_deepen_premium_model", "auto")
+        self.deepen_premium_model = deepen_premium_model or settings.get("default_deepen_premium_model", "MedExpert-Onco")
         # Fallback chain (configurable from admin)
         self.fallback_chain = []
         fb1_provider = settings.get("fallback1_provider", "")

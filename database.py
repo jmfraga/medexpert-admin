@@ -578,9 +578,9 @@ def get_expert_llm_config(expert_slug: str) -> dict:
     base_provider = (expert.get("base_provider") if expert else None) or settings.get("default_provider", "anthropic")
     base_model = (expert.get("base_model") if expert else None) or settings.get("default_model", "claude-haiku-4-5-20251001")
     deepen_provider = (expert.get("deepen_provider") if expert else None) or settings.get("default_deepen_provider", "synapse")
-    deepen_model = (expert.get("deepen_model") if expert else None) or settings.get("default_deepen_model", "auto")
+    deepen_model = (expert.get("deepen_model") if expert else None) or settings.get("default_deepen_model", "MedExpert-Onco")
     deepen_premium_provider = (expert.get("deepen_premium_provider") if expert else None) or settings.get("default_deepen_premium_provider", "synapse")
-    deepen_premium_model = (expert.get("deepen_premium_model") if expert else None) or settings.get("default_deepen_premium_model", "auto")
+    deepen_premium_model = (expert.get("deepen_premium_model") if expert else None) or settings.get("default_deepen_premium_model", "MedExpert-Onco")
 
     return {
         "base_provider": base_provider,

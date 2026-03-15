@@ -792,7 +792,7 @@ AVAILABLE_MODELS = {
         {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B"},
     ],
     "synapse": [
-        {"id": "auto", "name": "MedExpert-Auto (ruteo inteligente)"},
+        {"id": "MedExpert-Onco", "name": "MedExpert-Onco (smart route)"},
         {"id": "qwen3.5-35b-a3b", "name": "Qwen 3.5 35B-A3B (local)"},
         {"id": "gpt-oss-20b", "name": "GPT-OSS 20B (local)"},
     ],
@@ -1265,7 +1265,7 @@ async def config_page(request: Request):
     has_openai = bool(os.getenv("OPENAI_API_KEY"))
     has_synapse = bool(os.getenv("SYNAPSE_API_KEY"))
     default_provider = settings.get("default_provider", "synapse" if has_synapse else ("anthropic" if has_anthropic else "openai"))
-    default_model = settings.get("default_model", "auto" if has_synapse else ("claude-sonnet-4-20250514" if has_anthropic else "gpt-4.1"))
+    default_model = settings.get("default_model", "MedExpert-Onco" if has_synapse else ("claude-sonnet-4-20250514" if has_anthropic else "gpt-4.1"))
     # Fallback chain settings
     fallback1_provider = settings.get("fallback1_provider", "")
     fallback1_model = settings.get("fallback1_model", "")
@@ -1527,17 +1527,18 @@ async def test_api_connection(request: Request):
             from openai import OpenAI
             synapse_url = os.getenv("SYNAPSE_BASE_URL", "http://100.72.169.113:8800/v1")
             client = OpenAI(base_url=synapse_url, api_key=api_key)
+            test_model = settings.get("default_model", "MedExpert-Onco")
             resp = client.chat.completions.create(
-                model="auto",
+                model=test_model,
                 max_tokens=10,
                 messages=[{"role": "user", "content": "Responde solo 'OK'"}],
                 timeout=15.0,
             )
             elapsed = _time.time() - start
-            model_used = getattr(resp, "model", "auto") or "auto"
+            model_used = getattr(resp, "model", test_model) or test_model
             return JSONResponse({
                 "ok": True,
-                "model": f"Synapse auto → {model_used}",
+                "model": f"Synapse {test_model} → {model_used}",
                 "response": resp.choices[0].message.content,
                 "time": f"{elapsed:.1f}s",
             })
