@@ -1731,7 +1731,7 @@ async def handle_voice(update, context):
 
         # Update status
         await processing_msg.edit_text(
-            f"Audio transcrito ({duration}s)\nBuscando en guias clinicas..."
+            f"Audio transcrito ({duration}s)\nBuscando en guias clinicas...\nLa revisión puede tomar unos minutos, por favor ten paciencia."
         )
 
         # Determine tier for query
@@ -1741,7 +1741,7 @@ async def handle_voice(update, context):
         # Update processing message for premium (literature search takes longer)
         if tier == "premium":
             await processing_msg.edit_text(
-                f"Audio transcrito ({duration}s)\nBuscando en guias clinicas + referencias..."
+                f"Audio transcrito ({duration}s)\nBuscando en guias clinicas + referencias...\nLa revisión puede tomar unos minutos, por favor ten paciencia."
             )
 
         # Query RAG + LLM (with user source filter and tier)
@@ -1924,6 +1924,7 @@ async def handle_text(update, context):
 
     # Show processing status
     processing_label = "Buscando en guias clinicas + referencias..." if tier == "premium" else "Buscando en guias clinicas..."
+    processing_label += "\nLa revisión puede tomar unos minutos, por favor ten paciencia."
     processing_msg = await update.message.reply_text(processing_label)
 
     try:
