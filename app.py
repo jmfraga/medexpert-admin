@@ -1527,7 +1527,7 @@ async def test_api_connection(request: Request):
             from openai import OpenAI
             synapse_url = os.getenv("SYNAPSE_BASE_URL", "http://100.72.169.113:8800/v1")
             client = OpenAI(base_url=synapse_url, api_key=api_key)
-            test_model = settings.get("default_model", "MedExpert-Onco")
+            test_model = db.get_all_settings().get("default_model", "MedExpert-Onco")
             resp = client.chat.completions.create(
                 model=test_model,
                 max_tokens=10,
