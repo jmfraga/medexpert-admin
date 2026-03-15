@@ -1149,18 +1149,27 @@ def _search_perplexity(query_text: str, settings: dict) -> list[dict]:
         query_short = query_text[:500] if len(query_text) > 500 else query_text
 
         prompt = (
-            "Busca literatura cientifica reciente y relevante sobre este caso clinico. "
-            "Enfocate en: revisiones sistematicas, meta-analisis, ensayos clinicos (RCTs) "
-            "y guias de practica clinica de los ultimos 5 años.\n\n"
-            f"Caso: {query_short}\n\n"
-            "Responde con una lista de los 5 articulos mas relevantes. "
+            "Busca literatura cientifica publicada en JOURNALS MEDICOS PEER-REVIEWED "
+            "sobre este caso clinico.\n\n"
+            "REGLAS ESTRICTAS:\n"
+            "- SOLO articulos de revistas medicas indexadas (PubMed, Scopus, Web of Science)\n"
+            "- SOLO de los ultimos 5 años (2021-2026)\n"
+            "- Priorizar: meta-analisis > revisiones sistematicas > ensayos clinicos (RCTs) > guias de practica clinica\n"
+            "- Priorizar journals de alto impacto: NEJM, Lancet, Lancet Oncology, JCO, "
+            "Annals of Oncology, Journal of Clinical Oncology, BMJ, JAMA, JAMA Oncology, "
+            "European Journal of Cancer, Cancer Research, Nature Medicine\n"
+            "- EXCLUIR: sitios web informativos, blogs medicos, panfletos, paginas de pacientes, "
+            "noticias, Wikipedia, WebMD, Mayo Clinic web, Medscape articulos informativos\n"
+            "- EXCLUIR: articulos anteriores a 2021\n\n"
+            f"Caso clinico: {query_short}\n\n"
+            "Responde con los 5 articulos mas relevantes y de mayor impacto. "
             "Para cada uno incluye:\n"
-            "- Titulo completo\n"
-            "- Autores principales\n"
+            "- Titulo completo del articulo\n"
+            "- Autores principales (apellido et al.)\n"
+            "- Revista (journal name)\n"
             "- Año de publicacion\n"
-            "- Revista\n"
-            "- Resumen breve (2-3 oraciones) en español\n"
-            "- DOI o URL si disponible"
+            "- Resumen breve (2-3 oraciones) en español de los hallazgos clave\n"
+            "- DOI o enlace a PubMed"
         )
 
         response = client.chat.completions.create(
