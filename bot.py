@@ -844,7 +844,7 @@ async def cmd_suscribir(update, context):
         "  Cancela cuando quieras\n\n"
         "<b>Plan Premium</b> (precio de lanzamiento)\n"
         "  Todo lo del Plan Basico\n"
-        "  Literatura cientifica PubMed en cada consulta\n"
+        "  Literatura cientifica y referencias en cada consulta\n"
         "  Soporte prioritario\n\n"
         "Selecciona plan y periodo:",
         parse_mode="HTML",
@@ -1738,10 +1738,10 @@ async def handle_voice(update, context):
         user_plan = db.get_bot_user_plan(user.id)
         tier = user_plan if user_plan in ("basic", "premium") else "free"
 
-        # Update processing message for premium (PubMed search takes longer)
+        # Update processing message for premium (literature search takes longer)
         if tier == "premium":
             await processing_msg.edit_text(
-                f"Audio transcrito ({duration}s)\nBuscando en guías clínicas + PubMed..."
+                f"Audio transcrito ({duration}s)\nBuscando en guias clinicas + referencias..."
             )
 
         # Query RAG + LLM (with user source filter and tier)
@@ -1923,7 +1923,7 @@ async def handle_text(update, context):
     tier = user_plan if user_plan in ("basic", "premium") else "free"
 
     # Show processing status
-    processing_label = "Buscando en guías clínicas + PubMed..." if tier == "premium" else "Buscando en guias clinicas..."
+    processing_label = "Buscando en guias clinicas + referencias..." if tier == "premium" else "Buscando en guias clinicas..."
     processing_msg = await update.message.reply_text(processing_label)
 
     try:
@@ -2021,7 +2021,7 @@ async def _show_limit_reached(update):
         "  Cancela cuando quieras\n\n"
         "<b>Plan Premium - $24.99 USD/mes</b>\n"
         "  Todo lo del Plan Basico\n"
-        "  Literatura cientifica PubMed en cada consulta\n"
+        "  Literatura cientifica y referencias en cada consulta\n"
         "  Soporte prioritario\n\n"
         "Usa /suscribir para activar"
     )

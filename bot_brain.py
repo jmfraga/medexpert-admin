@@ -315,21 +315,13 @@ class BotBrain:
                 citations.append(label)
         result["citations"] = citations
 
-        # PubMed for premium users on first response
-        pubmed_papers = []
+        # Literature search for premium users on first response
+        reference_papers = []
         if tier == "premium":
-            try:
-                from pubmed import search_pubmed, translate_abstracts, format_papers_telegram
-                pubmed_query_en = _build_pubmed_query(text)
-                logger.info(f"PubMed (1st response): '{pubmed_query_en}'")
-                pubmed_papers = search_pubmed(pubmed_query_en, max_results=5)
-                if pubmed_papers:
-                    pubmed_papers = translate_abstracts(pubmed_papers)
-                    result["response"] += "\n\n" + format_papers_telegram(pubmed_papers)
-                    logger.info(f"PubMed: {len(pubmed_papers)} papers added to first response")
-            except Exception as e:
-                logger.warning(f"PubMed search failed (non-blocking): {e}")
-        result["pubmed_papers"] = pubmed_papers
+            reference_papers = _search_literature(text)
+        result["pubmed_papers"] = reference_papers
+        # Flag for Telegram formatting (don't inline, suggest PDF)
+        result["has_references"] = len(reference_papers) > 0
 
         return result
 
@@ -522,20 +514,10 @@ class BotBrain:
             logger.info(f"Deepen OK ({deepen_provider}/{deepen_model}) "
                         f"{token_usage['input_tokens']}in/{token_usage['output_tokens']}out")
 
-            # PubMed search for premium follow-up questions
+            # Literature search for premium follow-up questions
             pubmed_papers = []
             if tier == "premium" and followup_question:
-                try:
-                    from pubmed import search_pubmed, translate_abstracts, format_papers_telegram
-                    pubmed_query_en = _build_pubmed_query(followup_question)
-                    logger.info(f"PubMed follow-up query: '{pubmed_query_en}'")
-                    pubmed_papers = search_pubmed(pubmed_query_en, max_results=5)
-                    if pubmed_papers:
-                        pubmed_papers = translate_abstracts(pubmed_papers)
-                        text += "\n\n" + format_papers_telegram(pubmed_papers)
-                        logger.info(f"PubMed: {len(pubmed_papers)} papers added to follow-up response")
-                except Exception as e:
-                    logger.warning(f"PubMed search failed (non-blocking): {e}")
+                pubmed_papers = _search_literature(followup_question)
 
             elapsed = time.time() - start
             return {
@@ -710,6 +692,10 @@ def format_response_for_telegram(result: dict, free_remaining: int | None = None
     if elapsed:
         footer_parts.append(f"\n<i>{elapsed:.1f}s</i>")
 
+    # Note about references in PDF (don't inline them in Telegram)
+    if result.get("has_references"):
+        footer_parts.append("\n<i>Se encontraron referencias cientificas. Descarga el PDF para verlas completas.</i>")
+
     if free_remaining is not None and free_remaining >= 0:
         if free_remaining > 0:
             footer_parts.append(f"\nConsultas gratis restantes: <b>{free_remaining}/5</b>")
@@ -821,37 +807,79 @@ def generate_consultation_pdf(query_text: str, response_text: str,
             y = _pdf_text(page, f"  {i}. {cite}", margin_l, y, content_w,
                           fontsize=8, color=(0.35, 0.35, 0.35))
 
-    # ── PubMed Papers ──
+    # ── References (PubMed or Perplexity) ──
     if pubmed_papers:
         y += 10
         new_page_if_needed(30)
-        y = _pdf_section_title(page, "LITERATURA CIENTIFICA RECIENTE", margin_l, y, content_w)
-        for i, paper in enumerate(pubmed_papers, 1):
-            new_page_if_needed(60)
-            # Title
-            y = _pdf_text(page, f"  {i}. {paper['title']}", margin_l, y, content_w,
+        # Check if we have a Perplexity summary
+        perplexity_summary = pubmed_papers[0].get("_perplexity_summary", "") if pubmed_papers else ""
+        if perplexity_summary:
+            y = _pdf_section_title(page, "LITERATURA CIENTIFICA RECOMENDADA", margin_l, y, content_w)
+            # Render Perplexity summary as body text
+            for line in perplexity_summary.split("\n"):
+                stripped = line.strip()
+                if not stripped:
+                    y += 4
+                    continue
+                new_page_if_needed(14)
+                is_header = stripped.endswith(":") and len(stripped) < 80
+                if is_header:
+                    y = _pdf_text(page, stripped, margin_l, y, content_w,
+                                  fontsize=8, fontname="hebo", color=(0.12, 0.25, 0.50))
+                elif stripped.startswith(("- ", "• ", "* ")):
+                    y = _pdf_text(page, f"  \u2022  {stripped[2:]}", margin_l, y, content_w,
+                                  fontsize=8, color=(0.15, 0.15, 0.15))
+                else:
+                    y = _pdf_text(page, stripped, margin_l, y, content_w,
+                                  fontsize=8, color=(0.1, 0.1, 0.1))
+            # Add clickable reference links
+            y += 8
+            new_page_if_needed(20)
+            y = _pdf_text(page, "ENLACES:", margin_l, y, content_w,
                           fontsize=8, fontname="hebo", color=(0.12, 0.25, 0.50))
-            # Authors + year + journal
-            meta_line = f"     {paper['authors']} ({paper['year']})"
-            if paper.get("journal"):
-                meta_line += f" - {paper['journal']}"
-            y = _pdf_text(page, meta_line, margin_l, y, content_w,
-                          fontsize=7, color=(0.4, 0.4, 0.4))
-            # Abstract (truncated)
-            if paper.get("abstract"):
-                abstract = paper.get("abstract_es", paper["abstract"])
-                abstract_short = abstract[:300] + "..." if len(abstract) > 300 else abstract
-                new_page_if_needed(40)
-                y = _pdf_text(page, f"     {abstract_short}", margin_l, y, content_w,
-                              fontsize=7, color=(0.25, 0.25, 0.25))
-            # DOI/PMID
-            if paper.get("doi_url"):
-                y = _pdf_text(page, f"     DOI: {paper['doi_url']}", margin_l, y, content_w,
-                              fontsize=7, color=(0.2, 0.4, 0.7))
-            elif paper.get("pmid"):
-                y = _pdf_text(page, f"     PMID: {paper['pmid']}", margin_l, y, content_w,
-                              fontsize=7, color=(0.2, 0.4, 0.7))
-            y += 4
+            for i, paper in enumerate(pubmed_papers, 1):
+                url = paper.get("doi_url") or paper.get("pubmed_url")
+                if not url:
+                    continue
+                new_page_if_needed(14)
+                link_text = f"  {i}. {paper['title'][:80]}{'...' if len(paper.get('title','')) > 80 else ''}"
+                link_y = y
+                y = _pdf_text(page, link_text, margin_l, y, content_w,
+                              fontsize=7, color=(0.1, 0.4, 0.8))
+                # Add clickable link annotation
+                link_rect = fitz_mod.Rect(margin_l, link_y - 2, margin_l + content_w, y)
+                page.insert_link({"kind": fitz_mod.LINK_URI, "from": link_rect, "uri": url})
+                y += 2
+        else:
+            y = _pdf_section_title(page, "LITERATURA CIENTIFICA RECIENTE", margin_l, y, content_w)
+            for i, paper in enumerate(pubmed_papers, 1):
+                new_page_if_needed(60)
+                # Title
+                y = _pdf_text(page, f"  {i}. {paper['title']}", margin_l, y, content_w,
+                              fontsize=8, fontname="hebo", color=(0.12, 0.25, 0.50))
+                # Authors + year + journal
+                meta_line = f"     {paper['authors']} ({paper['year']})"
+                if paper.get("journal"):
+                    meta_line += f" - {paper['journal']}"
+                y = _pdf_text(page, meta_line, margin_l, y, content_w,
+                              fontsize=7, color=(0.4, 0.4, 0.4))
+                # Abstract (truncated)
+                if paper.get("abstract"):
+                    abstract = paper.get("abstract_es", paper["abstract"])
+                    abstract_short = abstract[:300] + "..." if len(abstract) > 300 else abstract
+                    new_page_if_needed(40)
+                    y = _pdf_text(page, f"     {abstract_short}", margin_l, y, content_w,
+                                  fontsize=7, color=(0.25, 0.25, 0.25))
+                # DOI/PMID — clickable link
+                url = paper.get("doi_url") or paper.get("pubmed_url")
+                if url:
+                    link_label = f"     {'DOI' if paper.get('doi_url') else 'PMID'}: {url}"
+                    link_y = y
+                    y = _pdf_text(page, link_label, margin_l, y, content_w,
+                                  fontsize=7, color=(0.1, 0.4, 0.8))
+                    link_rect = fitz_mod.Rect(margin_l, link_y - 2, margin_l + content_w, y)
+                    page.insert_link({"kind": fitz_mod.LINK_URI, "from": link_rect, "uri": url})
+                y += 4
 
     # ── Disclaimer footer on ALL pages ──
     disclaimer_text = "AVISO: Herramienta de apoyo clinico. NO reemplaza el criterio medico profesional."
@@ -1061,6 +1089,136 @@ _CLINICAL_TRANSLATIONS = {
     "recomendación": "recommendation", "recomendacion": "recommendation",
     "manejo": "management", "seguimiento": "follow-up",
 }
+
+
+def _search_literature(query_text: str) -> list[dict]:
+    """Search for clinical literature using configured provider (Perplexity or PubMed).
+
+    Returns list of paper dicts compatible with PDF generation:
+    {title, authors, year, abstract, abstract_es, doi_url, pubmed_url, journal, pmid}
+    """
+    settings = db.get_all_settings()
+    perplexity_enabled = settings.get("search_perplexity_enabled") == "1"
+    pubmed_enabled = settings.get("search_pubmed_enabled", "1") != "0"
+
+    papers = []
+
+    # Try Perplexity first if enabled
+    if perplexity_enabled:
+        papers = _search_perplexity(query_text, settings)
+        if papers:
+            return papers
+
+    # Fall back to PubMed if enabled
+    if pubmed_enabled:
+        try:
+            from pubmed import search_pubmed, translate_abstracts
+            pubmed_query_en = _build_pubmed_query(query_text)
+            if pubmed_query_en:
+                logger.info(f"PubMed search: '{pubmed_query_en}'")
+                papers = search_pubmed(pubmed_query_en, max_results=5)
+                if papers:
+                    papers = translate_abstracts(papers)
+                    logger.info(f"PubMed: {len(papers)} papers found")
+        except Exception as e:
+            logger.warning(f"PubMed search failed (non-blocking): {e}")
+
+    return papers
+
+
+def _search_perplexity(query_text: str, settings: dict) -> list[dict]:
+    """Search for clinical literature via Perplexity (Synapse).
+
+    Returns papers in the same format as PubMed for PDF compatibility.
+    """
+    api_key = os.getenv("PERPLEXITY_API_KEY", "")
+    base_url = os.getenv("PERPLEXITY_BASE_URL", "http://100.72.169.113:8800/v1")
+    model = settings.get("search_perplexity_model_fast", "sonar")
+
+    if not api_key:
+        logger.warning("Perplexity enabled but no API key")
+        return []
+
+    try:
+        from openai import OpenAI
+        import json as _json
+
+        client = OpenAI(base_url=base_url, api_key=api_key)
+
+        # Truncate query
+        query_short = query_text[:500] if len(query_text) > 500 else query_text
+
+        prompt = (
+            "Busca literatura cientifica reciente y relevante sobre este caso clinico. "
+            "Enfocate en: revisiones sistematicas, meta-analisis, ensayos clinicos (RCTs) "
+            "y guias de practica clinica de los ultimos 5 años.\n\n"
+            f"Caso: {query_short}\n\n"
+            "Responde con una lista de los 5 articulos mas relevantes. "
+            "Para cada uno incluye:\n"
+            "- Titulo completo\n"
+            "- Autores principales\n"
+            "- Año de publicacion\n"
+            "- Revista\n"
+            "- Resumen breve (2-3 oraciones) en español\n"
+            "- DOI o URL si disponible"
+        )
+
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=60.0,
+        )
+
+        response_text = response.choices[0].message.content or ""
+        model_used = getattr(response, "model", model) or model
+        logger.info(f"Perplexity search OK ({model_used}), {len(response_text)} chars")
+
+        # Extract citations from Perplexity response (returned as extra field)
+        raw = response.model_dump() if hasattr(response, "model_dump") else {}
+        citations_urls = raw.get("citations", [])
+        search_results = raw.get("search_results", [])
+
+        # Build papers list from search_results + citations
+        papers = []
+        if search_results:
+            for sr in search_results[:8]:
+                papers.append({
+                    "title": sr.get("title", ""),
+                    "authors": "",
+                    "year": (sr.get("date", "") or sr.get("last_updated", ""))[:4],
+                    "abstract": sr.get("snippet", ""),
+                    "abstract_es": sr.get("snippet", ""),
+                    "doi_url": sr.get("url", ""),
+                    "pubmed_url": "",
+                    "pmid": "",
+                    "journal": sr.get("source", "web"),
+                })
+        elif citations_urls:
+            # Fallback: use citation URLs
+            for url in citations_urls[:8]:
+                papers.append({
+                    "title": url,
+                    "authors": "",
+                    "year": "",
+                    "abstract": "",
+                    "abstract_es": "",
+                    "doi_url": url,
+                    "pubmed_url": "",
+                    "pmid": "",
+                    "journal": "",
+                })
+
+        # Also store the full Perplexity response text for context
+        if papers:
+            papers[0]["_perplexity_summary"] = response_text
+
+        logger.info(f"Perplexity: {len(papers)} references extracted")
+        return papers
+
+    except Exception as e:
+        logger.warning(f"Perplexity search failed: {e}")
+        return []
 
 
 def _build_pubmed_query(original_query: str, followup_question: str = None) -> str:
