@@ -792,7 +792,7 @@ AVAILABLE_MODELS = {
         {"id": "openai/gpt-oss-20b", "name": "GPT-OSS 20B"},
     ],
     "synapse": [
-        {"id": "auto", "name": "Auto (ruteo inteligente)"},
+        {"id": "auto", "name": "MedExpert-Auto (ruteo inteligente)"},
         {"id": "qwen3.5-35b-a3b", "name": "Qwen 3.5 35B-A3B (local)"},
         {"id": "gpt-oss-20b", "name": "GPT-OSS 20B (local)"},
     ],
