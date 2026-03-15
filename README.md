@@ -65,6 +65,15 @@ Additional models available for admin/client configuration:
 | Anthropic | Opus 4.6, Sonnet 4.6, Sonnet 4, Haiku 4.5 |
 | OpenAI | GPT-5.1, GPT-4.1, GPT-4.1 Mini, GPT-4.1 Nano |
 | Groq | GPT-OSS 20B, GPT-OSS 120B, Llama 3.1 8B |
+| [Synapse](https://github.com/jmfraga/synapse-router) | Auto (intelligent routing), Qwen 3.5 35B, GPT-OSS 20B (local) |
+
+**[Synapse Router](https://github.com/jmfraga/synapse-router)** — OpenAI-compatible intelligent routing gateway running on local hardware (M4 Pro). Model `auto` automatically selects the optimal model based on query intent. Supports 391 models across 7 providers (Ollama, Groq, NVIDIA NIM, Anthropic, OpenAI, Gemini, Perplexity). Configurable from Admin > Configuración.
+
+**Response format:** All responses use the SAER/SBAR clinical communication standard:
+- **S**ituación — Clinical context summary
+- **A**ntecedentes — Relevant background (epidemiology, risk factors)
+- **E**valuación — Evidence-based analysis with guideline citations
+- **R**ecomendaciones — Therapeutic options, dosing, follow-up
 
 ## Quick Start
 
@@ -170,6 +179,8 @@ Environment variables (`.env`):
 | `ANTHROPIC_API_KEY` | — | Anthropic API key (premium deepen) |
 | `OPENAI_API_KEY` | — | OpenAI API key |
 | `GROQ_API_KEY` | — | Groq API key (base + deepen models) |
+| `SYNAPSE_API_KEY` | — | [Synapse](https://github.com/jmfraga/synapse-router) API key (`syn-...`) |
+| `SYNAPSE_BASE_URL` | `http://100.72.169.113:8800/v1` | Synapse router base URL |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token from BotFather |
 | `BOT_SPECIALTY` | `oncologia` | Default specialty for the bot |
 | `BOT_WHISPER_MODEL` | `medium` | Whisper model for voice messages |
