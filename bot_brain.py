@@ -140,6 +140,16 @@ class BotBrain:
         self.deepen_model = deepen_model or settings.get("default_deepen_model", "claude-sonnet-4-20250514")
         self.deepen_premium_provider = deepen_premium_provider or settings.get("default_deepen_premium_provider", "anthropic")
         self.deepen_premium_model = deepen_premium_model or settings.get("default_deepen_premium_model", "claude-opus-4-6")
+        # Fallback chain (configurable from admin)
+        self.fallback_chain = []
+        fb1_provider = settings.get("fallback1_provider", "")
+        fb1_model = settings.get("fallback1_model", "")
+        if fb1_provider and fb1_model:
+            self.fallback_chain.append((fb1_provider, fb1_model))
+        fb2_provider = settings.get("fallback2_provider", "")
+        fb2_model = settings.get("fallback2_model", "")
+        if fb2_provider and fb2_model:
+            self.fallback_chain.append((fb2_provider, fb2_model))
         self.client = None
         self._init_client()
 
@@ -266,17 +276,20 @@ class BotBrain:
         # Call LLM — extended thinking for Haiku gives near-Sonnet quality
         result = self._call_llm(system, user_message, max_tokens=2000, extended_thinking=True)
 
-        # Fallback to Anthropic if primary fails
-        if result["status"] == "error" and self.provider != "anthropic":
-            logger.warning(f"{self.provider} failed, falling back to Anthropic")
+        # Fallback chain if primary fails
+        if result["status"] == "error" and self.fallback_chain:
             original_provider = self.provider
             original_model = self.model
-            self.provider = "anthropic"
-            self.model = "claude-sonnet-4-20250514"
-            self._init_client()
-            result = self._call_llm(system, user_message, max_tokens=800)
-            result["fallback"] = True
-            result["original_provider"] = original_provider
+            for fb_provider, fb_model in self.fallback_chain:
+                logger.warning(f"{self.provider}/{self.model} failed, trying fallback {fb_provider}/{fb_model}")
+                self.provider = fb_provider
+                self.model = fb_model
+                self._init_client()
+                result = self._call_llm(system, user_message, max_tokens=2000, extended_thinking=True)
+                if result["status"] == "success":
+                    result["fallback"] = True
+                    result["original_provider"] = original_provider
+                    break
             # Restore original for next query
             self.provider = original_provider
             self.model = original_model

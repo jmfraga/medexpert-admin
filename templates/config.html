@@ -333,22 +333,17 @@
         </div>
 
         <div class="config-section">
-            <h2>Modelo LLM default (clientes) <span class="save-status" id="modelSaveStatus">Guardado</span></h2>
+            <h2>Modelo LLM y cadena de fallback <span class="save-status" id="modelSaveStatus">Guardado</span></h2>
+
             <div class="config-row">
-                <span class="config-label">Provider</span>
-                <select class="config-select" id="providerSelect" onchange="onProviderChange()">
+                <span class="config-label" style="min-width:90px; color:#4ade80; font-weight:600;">Default</span>
+                <select class="config-select" id="providerSelect" onchange="onProviderChange('providerSelect','modelSelect')" style="min-width:130px;">
                     {% for provider in available_models %}
                     <option value="{{ provider }}" {% if provider == default_provider %}selected{% endif %}>
                         {{ provider | capitalize }}
                     </option>
                     {% endfor %}
-                    {% if not available_models %}
-                    <option value="" disabled selected>Sin API keys configuradas</option>
-                    {% endif %}
                 </select>
-            </div>
-            <div class="config-row">
-                <span class="config-label">Modelo</span>
                 <select class="config-select" id="modelSelect" onchange="saveModelSettings()">
                     {% for provider, models in available_models.items() %}
                         {% for m in models %}
@@ -361,9 +356,58 @@
                     {% endfor %}
                 </select>
             </div>
+
+            <div class="config-row">
+                <span class="config-label" style="min-width:90px; color:#f59e0b; font-weight:600;">Fallback 1</span>
+                <select class="config-select" id="fb1ProviderSelect" onchange="onProviderChange('fb1ProviderSelect','fb1ModelSelect')" style="min-width:130px;">
+                    <option value="" {% if not fallback1_provider %}selected{% endif %}>— ninguno —</option>
+                    {% for provider in all_models %}
+                    <option value="{{ provider }}" {% if provider == fallback1_provider %}selected{% endif %}>
+                        {{ provider | capitalize }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <select class="config-select" id="fb1ModelSelect" onchange="saveModelSettings()">
+                    <option value="" data-provider="">—</option>
+                    {% for provider, models in all_models.items() %}
+                        {% for m in models %}
+                        <option value="{{ m.id }}" data-provider="{{ provider }}"
+                            {% if m.id == fallback1_model %}selected{% endif %}
+                            {% if provider != fallback1_provider %}style="display:none"{% endif %}>
+                            {{ m.name }} ({{ m.id }})
+                        </option>
+                        {% endfor %}
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="config-row">
+                <span class="config-label" style="min-width:90px; color:#f87171; font-weight:600;">Fallback 2</span>
+                <select class="config-select" id="fb2ProviderSelect" onchange="onProviderChange('fb2ProviderSelect','fb2ModelSelect')" style="min-width:130px;">
+                    <option value="" {% if not fallback2_provider %}selected{% endif %}>— ninguno —</option>
+                    {% for provider in all_models %}
+                    <option value="{{ provider }}" {% if provider == fallback2_provider %}selected{% endif %}>
+                        {{ provider | capitalize }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <select class="config-select" id="fb2ModelSelect" onchange="saveModelSettings()">
+                    <option value="" data-provider="">—</option>
+                    {% for provider, models in all_models.items() %}
+                        {% for m in models %}
+                        <option value="{{ m.id }}" data-provider="{{ provider }}"
+                            {% if m.id == fallback2_model %}selected{% endif %}
+                            {% if provider != fallback2_provider %}style="display:none"{% endif %}>
+                            {{ m.name }} ({{ m.id }})
+                        </option>
+                        {% endfor %}
+                    {% endfor %}
+                </select>
+            </div>
+
             <p style="font-size:0.78em; color:#475569; margin-top:8px;">
-                Este modelo se usara como default en las licencias nuevas.
-                Los clientes pueden cambiar el modelo desde su interfaz.
+                Si el provider default falla, se intenta Fallback 1 y luego Fallback 2 automaticamente.
+                En el futuro, cada experto podra tener su propia cadena de modelos.
             </p>
         </div>
 
@@ -594,17 +638,24 @@
         });
 
         // ── Config Settings ──
-        function onProviderChange() {
-            const provider = document.getElementById('providerSelect').value;
-            const modelSel = document.getElementById('modelSelect');
+        function onProviderChange(providerSelId, modelSelId) {
+            const provider = document.getElementById(providerSelId).value;
+            const modelSel = document.getElementById(modelSelId);
             let firstVisible = null;
             for (const opt of modelSel.options) {
+                if (!opt.dataset.provider && opt.value === '') {
+                    // "— ninguno —" placeholder, always visible for fallbacks
+                    opt.style.display = '';
+                    continue;
+                }
                 const show = opt.dataset.provider === provider;
                 opt.style.display = show ? '' : 'none';
                 if (show && !firstVisible) firstVisible = opt;
             }
-            if (firstVisible) {
+            if (provider && firstVisible) {
                 modelSel.value = firstVisible.value;
+            } else if (!provider) {
+                modelSel.value = '';
             }
             saveModelSettings();
         }
@@ -614,8 +665,18 @@
             const model = document.getElementById('modelSelect').value;
             if (!provider || !model) return;
 
-            apiCall('/api/settings/model', 'POST', { provider, model })
-                .then(data => {
+            const fb1Provider = document.getElementById('fb1ProviderSelect').value;
+            const fb1Model = document.getElementById('fb1ModelSelect').value;
+            const fb2Provider = document.getElementById('fb2ProviderSelect').value;
+            const fb2Model = document.getElementById('fb2ModelSelect').value;
+
+            apiCall('/api/settings/model', 'POST', {
+                provider, model,
+                fallback1_provider: fb1Provider,
+                fallback1_model: fb1Model,
+                fallback2_provider: fb2Provider,
+                fallback2_model: fb2Model,
+            }).then(data => {
                     if (data.ok) {
                         const status = document.getElementById('modelSaveStatus');
                         status.classList.add('show');

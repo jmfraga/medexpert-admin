@@ -1109,17 +1109,25 @@ async def config_page(request: Request):
     settings = db.get_all_settings()
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY"))
     has_openai = bool(os.getenv("OPENAI_API_KEY"))
+    has_groq = bool(os.getenv("GROQ_API_KEY"))
     has_synapse = bool(os.getenv("SYNAPSE_API_KEY"))
-    default_provider = settings.get("default_provider", "anthropic" if has_anthropic else "openai")
-    default_model = settings.get("default_model", "claude-sonnet-4-20250514" if has_anthropic else "gpt-4.1")
+    default_provider = settings.get("default_provider", "synapse" if has_synapse else ("anthropic" if has_anthropic else "openai"))
+    default_model = settings.get("default_model", "auto" if has_synapse else ("claude-sonnet-4-20250514" if has_anthropic else "gpt-4.1"))
+    # Fallback chain settings
+    fallback1_provider = settings.get("fallback1_provider", "")
+    fallback1_model = settings.get("fallback1_model", "")
+    fallback2_provider = settings.get("fallback2_provider", "")
+    fallback2_model = settings.get("fallback2_model", "")
     # Build available models based on configured keys
     models = {}
+    if has_synapse:
+        models["synapse"] = AVAILABLE_MODELS["synapse"]
     if has_anthropic:
         models["anthropic"] = AVAILABLE_MODELS["anthropic"]
     if has_openai:
         models["openai"] = AVAILABLE_MODELS["openai"]
-    if has_synapse:
-        models["synapse"] = AVAILABLE_MODELS["synapse"]
+    if has_groq:
+        models["groq"] = AVAILABLE_MODELS["groq"]
     # Mask keys for display (show first 7 + last 4 chars)
     def mask_key(key: str) -> str:
         if not key or len(key) < 12:
@@ -1152,7 +1160,12 @@ async def config_page(request: Request):
         "synapse_url": synapse_url,
         "default_provider": default_provider,
         "default_model": default_model,
+        "fallback1_provider": fallback1_provider,
+        "fallback1_model": fallback1_model,
+        "fallback2_provider": fallback2_provider,
+        "fallback2_model": fallback2_model,
         "available_models": models,
+        "all_models": AVAILABLE_MODELS,
         "pricing_plans": pricing_plans,
         "promotions": promotions,
         "payment_mode": payment_mode,
@@ -1231,6 +1244,13 @@ async def save_model_settings(request: Request):
         return JSONResponse({"ok": False, "error": "Provider y modelo requeridos"}, status_code=400)
     db.set_setting("default_provider", provider)
     db.set_setting("default_model", model)
+    # Save fallback chain if provided
+    if "fallback1_provider" in data:
+        db.set_setting("fallback1_provider", data.get("fallback1_provider", ""))
+        db.set_setting("fallback1_model", data.get("fallback1_model", ""))
+    if "fallback2_provider" in data:
+        db.set_setting("fallback2_provider", data.get("fallback2_provider", ""))
+        db.set_setting("fallback2_model", data.get("fallback2_model", ""))
     return JSONResponse({"ok": True, "provider": provider, "model": model})
 
 
