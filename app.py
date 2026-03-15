@@ -1114,7 +1114,7 @@ async def save_search_settings(request: Request):
 
     db.set_setting("search_pubmed_enabled", "1" if data.get("pubmed_enabled") else "0")
     db.set_setting("search_perplexity_enabled", "1" if data.get("perplexity_enabled") else "0")
-    db.set_setting("search_perplexity_model_fast", data.get("perplexity_model_fast", "sonar-reasoning"))
+    db.set_setting("search_perplexity_model_fast", data.get("perplexity_model_fast", "sonar"))
     db.set_setting("search_perplexity_model_deep", data.get("perplexity_model_deep", "sonar-deep-research"))
 
     # Save Perplexity API key + URL to .env (separate from main Synapse key)
@@ -1282,7 +1282,7 @@ async def config_page(request: Request):
         "search_perplexity_enabled": settings.get("search_perplexity_enabled", "0"),
         "perplexity_key_masked": mask_key(os.getenv("PERPLEXITY_API_KEY", "")),
         "perplexity_url": os.getenv("PERPLEXITY_BASE_URL", "http://100.72.169.113:8800/v1"),
-        "search_perplexity_model_fast": settings.get("search_perplexity_model_fast", "sonar-reasoning"),
+        "search_perplexity_model_fast": settings.get("search_perplexity_model_fast", "sonar"),
         "search_perplexity_model_deep": settings.get("search_perplexity_model_deep", "sonar-deep-research"),
         "default_provider": default_provider,
         "default_model": default_model,
@@ -1509,7 +1509,7 @@ async def test_api_connection(request: Request):
         elif provider == "perplexity":
             from openai import OpenAI
             base_url = data.get("base_url") or os.getenv("PERPLEXITY_BASE_URL", "http://100.72.169.113:8800/v1")
-            test_model = data.get("model") or "sonar-reasoning"
+            test_model = data.get("model") or "sonar"
             if not api_key or "*" in api_key:
                 api_key = os.getenv("PERPLEXITY_API_KEY", "")
             if not api_key:
