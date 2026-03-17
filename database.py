@@ -263,7 +263,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             telegram_id INTEGER NOT NULL,
             specialty TEXT NOT NULL,
-            query_type TEXT NOT NULL CHECK(query_type IN ('voice', 'text')),
+            query_type TEXT NOT NULL CHECK(query_type IN ('voice', 'text', 'image', 'document')),
             query_text TEXT DEFAULT '',
             response_text TEXT DEFAULT '',
             response_time_seconds REAL DEFAULT 0,
