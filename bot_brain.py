@@ -187,7 +187,8 @@ class BotBrain:
 
     def query(self, text: str, expert_slug: str,
               source_filter: dict | None = None,
-              tier: str = "free") -> dict:
+              tier: str = "free",
+              image_data: list | None = None) -> dict:
         """Run a clinical query: RAG search + LLM reasoning.
 
         Returns dict with: status, response, rag_context, provider, model,
@@ -274,7 +275,7 @@ class BotBrain:
         )
 
         # Call LLM — extended thinking for Haiku gives near-Sonnet quality
-        result = self._call_llm(system, user_message, max_tokens=2000, extended_thinking=True)
+        result = self._call_llm(system, user_message, max_tokens=2000, extended_thinking=True, image_data=image_data)
 
         # Fallback chain if primary fails
         if result["status"] == "error" and self.fallback_chain:
@@ -285,7 +286,7 @@ class BotBrain:
                 self.provider = fb_provider
                 self.model = fb_model
                 self._init_client()
-                result = self._call_llm(system, user_message, max_tokens=2000, extended_thinking=True)
+                result = self._call_llm(system, user_message, max_tokens=2000, extended_thinking=True, image_data=image_data)
                 if result["status"] == "success":
                     result["fallback"] = True
                     result["original_provider"] = original_provider
@@ -546,7 +547,7 @@ class BotBrain:
             }
 
     def _call_llm(self, system: str, user_message: str, max_tokens: int = 800,
-                  extended_thinking: bool = False) -> dict:
+                  extended_thinking: bool = False, image_data: list | None = None) -> dict:
         if self.client is None:
             return {
                 "status": "error",
@@ -558,8 +559,26 @@ class BotBrain:
             token_usage = {"input_tokens": 0, "output_tokens": 0}
 
             if self.provider == "anthropic":
+                # Build message content (multimodal if image provided)
+                if image_data:
+                    content = []
+                    for img in image_data:
+                        content.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img["media_type"],
+                                "data": img["data"],
+                            }
+                        })
+                    content.append({"type": "text", "text": user_message})
+                    messages = [{"role": "user", "content": content}]
+                else:
+                    messages = [{"role": "user", "content": user_message}]
+
                 # Extended thinking for Haiku — better quality at Haiku cost
                 use_thinking = extended_thinking and "haiku" in self.model
+                timeout = 120.0 if image_data else 90.0
                 if use_thinking:
                     response = self.client.messages.create(
                         model=self.model,
@@ -569,8 +588,8 @@ class BotBrain:
                             "budget_tokens": 8000,
                         },
                         system=system,
-                        messages=[{"role": "user", "content": user_message}],
-                        timeout=90.0,
+                        messages=messages,
+                        timeout=timeout,
                     )
                     # Extract text block (skip thinking blocks)
                     response_text = ""
@@ -583,8 +602,8 @@ class BotBrain:
                         model=self.model,
                         max_tokens=max_tokens,
                         system=system,
-                        messages=[{"role": "user", "content": user_message}],
-                        timeout=45.0,
+                        messages=messages,
+                        timeout=timeout,
                     )
                     response_text = response.content[0].text
                 if hasattr(response, "usage") and response.usage:
@@ -593,7 +612,19 @@ class BotBrain:
                         "output_tokens": response.usage.output_tokens,
                     }
             else:
-                # OpenAI-compatible (OpenAI, Groq, Ollama)
+                # OpenAI-compatible (OpenAI, Groq, Ollama, Synapse)
+                if image_data:
+                    user_content = []
+                    for img in image_data:
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{img['media_type']};base64,{img['data']}"}
+                        })
+                    user_content.append({"type": "text", "text": user_message})
+                    user_msg = {"role": "user", "content": user_content}
+                else:
+                    user_msg = {"role": "user", "content": user_message}
+
                 is_gpt5 = "gpt-5" in self.model
                 token_param = (
                     {"max_completion_tokens": max_tokens}
@@ -605,7 +636,7 @@ class BotBrain:
                     **token_param,
                     messages=[
                         {"role": "system", "content": system},
-                        {"role": "user", "content": user_message},
+                        user_msg,
                     ],
                     timeout=300.0,
                 )

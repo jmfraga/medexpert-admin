@@ -15,6 +15,7 @@ import asyncio
 import logging
 import tempfile
 import argparse
+import base64
 from datetime import datetime
 from pathlib import Path
 
@@ -1659,6 +1660,205 @@ async def _send_verification_nudge(update, user_id):
             )
 
 
+async def handle_photo_or_doc(update, context):
+    """Process photo or document: image → vision / PDF → text extraction → query → respond."""
+    user = update.effective_user
+    specialty = context.bot_data.get("specialty", "oncologia")
+
+    # Verification flow takes priority
+    handled = await handle_verification_photo(update, context)
+    if handled:
+        return
+
+    # Terms + verification gate
+    if not await _check_terms_and_verification(update, user.id):
+        return
+
+    # Check limits
+    if not db.can_bot_user_query(user.id, specialty, FREE_QUERY_LIMIT):
+        await _show_limit_reached(update)
+        return
+
+    # Rate limit
+    user_plan = db.get_bot_user_plan(user.id)
+    allowed, wait_seconds = check_rate_limit(user.id, user_plan)
+    if not allowed:
+        await update.message.reply_text(
+            f"Has alcanzado el limite de consultas por hora. "
+            f"Intenta de nuevo en {wait_seconds} segundos.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Ensure user exists
+    db.get_or_create_bot_user(
+        telegram_id=user.id,
+        username=user.username or "",
+        first_name=user.first_name or "",
+        specialty=specialty,
+    )
+
+    # Determine what was sent
+    photo = update.message.photo[-1] if update.message.photo else None
+    document = update.message.document if not photo else None
+    caption = (update.message.caption or "").strip()
+
+    # Download file
+    try:
+        if photo:
+            file = await photo.get_file()
+            ext = ".jpg"
+        elif document:
+            file = await document.get_file()
+            fname = document.file_name or ""
+            ext = Path(fname).suffix.lower() if fname else ""
+        else:
+            await update.message.reply_text("No se detecto archivo. Intenta de nuevo.")
+            return
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp_path = tmp.name
+            await file.download_to_drive(tmp_path)
+    except Exception as e:
+        logger.error(f"File download error: {e}", exc_info=True)
+        await update.message.reply_text("Error descargando archivo. Intenta de nuevo.")
+        return
+
+    # Process based on file type
+    image_data = None
+    extracted_text = None
+
+    try:
+        if photo or ext in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+            # Image → send to Claude Vision
+            media_types = {
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".png": "image/png", ".gif": "image/gif",
+                ".webp": "image/webp",
+            }
+            media_type = media_types.get(ext, "image/jpeg")
+            with open(tmp_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode("utf-8")
+            image_data = [{"media_type": media_type, "data": img_b64}]
+            query_text = caption or "Analiza esta imagen clinica. Identifica e interpreta los resultados, valores, hallazgos o datos clinicos relevantes."
+            processing_msg = await update.message.reply_text(
+                "Analizando imagen...\nLa revisión puede tomar unos minutos, por favor ten paciencia."
+            )
+
+        elif ext == ".pdf":
+            # PDF → extract text with PyMuPDF
+            import fitz
+            doc = fitz.open(tmp_path)
+            pages_text = []
+            for page in doc:
+                pages_text.append(page.get_text())
+            doc.close()
+            extracted_text = "\n".join(pages_text).strip()
+
+            if not extracted_text:
+                await update.message.reply_text(
+                    "No se pudo extraer texto del PDF (puede ser un escaneo). "
+                    "Intenta enviar una foto del documento."
+                )
+                return
+
+            # Truncate if very long (keep most relevant)
+            if len(extracted_text) > 8000:
+                extracted_text = extracted_text[:8000] + "\n\n[... documento truncado ...]"
+
+            query_text = caption or "Analiza el siguiente documento clinico. Identifica e interpreta los resultados, valores, hallazgos o datos clinicos relevantes."
+            query_text = f"{query_text}\n\nCONTENIDO DEL DOCUMENTO:\n{extracted_text}"
+            processing_msg = await update.message.reply_text(
+                "Analizando documento PDF...\nLa revisión puede tomar unos minutos, por favor ten paciencia."
+            )
+
+        else:
+            await update.message.reply_text(
+                "Formato no soportado. Envia una imagen (foto) o un PDF."
+            )
+            return
+
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    # Query RAG + LLM
+    try:
+        query_type = "image" if image_data else "document"
+        logger.info(f"{query_type.title()} from {user.id}: '{query_text[:80]}...'")
+
+        tier = user_plan if user_plan in ("basic", "premium") else "free"
+        brain = get_brain(specialty)
+        source_filter = _build_source_filter(user.id)
+        result = brain.query(query_text, expert_slug=specialty, source_filter=source_filter, tier=tier, image_data=image_data)
+
+        # Extract clinical metadata
+        metadata = extract_clinical_metadata(query_text, result.get("response", ""), specialty)
+        metadata_json = _json.dumps(metadata, ensure_ascii=False)
+
+        # Log consultation
+        free_used = db.count_bot_free_queries(user.id, specialty)
+        is_free = user_plan == "free" and free_used < FREE_QUERY_LIMIT
+        consultation_id = db.log_bot_consultation(
+            telegram_id=user.id,
+            specialty=specialty,
+            query_type=query_type,
+            query_text=anonymize_text(query_text[:500]),
+            response_text=result.get("response", ""),
+            response_time_seconds=result.get("processing_time", 0),
+            llm_provider=result.get("provider", ""),
+            llm_model=result.get("model", ""),
+            tokens_input=result.get("token_usage", {}).get("input_tokens", 0),
+            tokens_output=result.get("token_usage", {}).get("output_tokens", 0),
+            rag_chunks_used=result.get("rag_chunks_used", 0),
+            is_free_tier=is_free,
+            citations=result.get("citations", []),
+            clinical_metadata_json=metadata_json,
+        )
+
+        # Format and send response
+        free_remaining = max(0, FREE_QUERY_LIMIT - free_used - 1)
+        show_free = free_remaining if (user_plan == "free" and is_free) else None
+        main_text, footer = format_response_for_telegram(
+            result,
+            free_remaining=show_free,
+        )
+
+        await processing_msg.delete()
+        await _send_long_message(update, main_text)
+
+        if footer:
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = [
+                [
+                    InlineKeyboardButton("Tengo una pregunta", callback_data=f"deepen_ask_{consultation_id}"),
+                    InlineKeyboardButton("Exportar PDF", callback_data=f"pdf_{consultation_id}"),
+                ],
+                [
+                    InlineKeyboardButton("¿Te sirvió?", callback_data=f"eval_{consultation_id}"),
+                    InlineKeyboardButton("📋 Nueva consulta", callback_data="mode_menu"),
+                ],
+            ]
+            await update.message.reply_text(
+                footer, parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        await _send_verification_nudge(update, user.id)
+
+    except Exception as e:
+        logger.error(f"Photo/doc processing error: {e}", exc_info=True)
+        try:
+            await processing_msg.edit_text(
+                "Error procesando archivo. Intenta de nuevo.\n\nSi persiste: /soporte"
+            )
+        except Exception:
+            pass
+
+
 async def handle_voice(update, context):
     """Process voice message: download → transcribe → query → respond."""
     user = update.effective_user
@@ -2476,13 +2676,7 @@ def main():
     app.add_handler(CommandHandler("fuentes", cmd_fuentes))
     app.add_handler(CommandHandler("buscar", cmd_buscar))
 
-    # Photo/document handler for verification flow
-    async def handle_photo_or_doc(update, context):
-        handled = await handle_verification_photo(update, context)
-        if not handled:
-            await update.message.reply_text(
-                "Envía un mensaje de texto o audio con tu consulta clínica."
-            )
+    # Photo/document handler (images → vision, PDFs → text extraction)
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_photo_or_doc))
 
     # Message handlers (voice and text)
