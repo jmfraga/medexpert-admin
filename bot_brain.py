@@ -248,8 +248,21 @@ class BotBrain:
             system = system_prompt + f"\n\nFecha: {datetime.now().strftime('%Y-%m-%d')}\n\nGUIAS CLINICAS:\n{rag_context}"
 
         # User message — SAER structure + Telegram-friendly formatting
+        # When processing images, instruct LLM to strip patient PII
+        pii_instruction = ""
+        if image_data:
+            pii_instruction = (
+                "PRIVACIDAD DEL PACIENTE (OBLIGATORIO):\n"
+                "La imagen puede contener datos personales del paciente. "
+                "NUNCA incluyas en tu respuesta nombres, apellidos, identificadores, "
+                "numeros de expediente, CURP, direcciones ni cualquier dato que identifique al paciente. "
+                "Solo haz referencia al sexo y edad del paciente (ej: 'Paciente femenina de 58 anos'). "
+                "Si la imagen contiene un nombre, IGNORALO por completo.\n\n"
+            )
+
         user_message = (
             "Consulta clinica:\n\n"
+            f"{pii_instruction}"
             f"{text}\n\n"
             "ESTRUCTURA SAER (OBLIGATORIO):\n"
             "Organiza tu respuesta asi:\n\n"
